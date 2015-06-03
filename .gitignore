@@ -1,0 +1,5 @@
+*.o
+*.so
+_site
+.*.sw*
+Gemfile.lock

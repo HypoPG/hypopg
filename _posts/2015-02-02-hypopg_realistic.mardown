@@ -1,0 +1,9 @@
+---
+layout: default
+modal-id: 1
+date: 2015-02-01
+img: hypopg-realistic.png
+title: More realistic EXPLAIN difference
+description: An improvement on a more realistic query EXPLAIN output
+
+---
