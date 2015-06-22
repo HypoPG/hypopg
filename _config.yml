@@ -4,7 +4,7 @@ email: contact@dalibo.com
 description: "HypoPG is an extension adding support for hypothetical indexes in PostgreSQL."
 twitter_username: ___powa___
 github_username:  dalibo
-ga_id: UA-637331-8
+ga_id: UA-637331-16
 
 # Build settings
 markdown: kramdown
