@@ -71,8 +71,8 @@
 
 PG_MODULE_MAGIC;
 
-#define HYPO_NB_COLS		12	/* # of column hypopg() returns */
-#define HYPO_CREATE_COLS	2	/* # of column hypopg_create_index() returns */
+#define HYPO_INDEX_NB_COLS		12	/* # of column hypopg() returns */
+#define HYPO_INDEX_CREATE_COLS	2	/* # of column hypopg_create_index() returns */
 
 bool		isExplain = false;
 
@@ -95,7 +95,7 @@ static MemoryContext HypoMemoryContext = NULL;
  * Some dynamic informations such as pages and lines are not stored but
  * computed when the hypothetical index is used.
  */
-typedef struct hypoEntry
+typedef struct hypoIndex
 {
 	Oid			oid;			/* hypothetical index unique identifier */
 	Oid			relid;			/* related relation Oid */
@@ -154,10 +154,10 @@ typedef struct hypoEntry
 	List	   *options;		/* WITH clause options: a list of DefElem */
 	bool		amcanorder;		/* does AM support order by column value? */
 
-} hypoEntry;
+} hypoIndex;
 
 /* List of hypothetic indexes for current backend */
-List	   *entries = NIL;
+List	   *hypoIndexes = NIL;
 
 
 /*--- Functions --- */
@@ -179,16 +179,16 @@ PG_FUNCTION_INFO_V1(hypopg_drop_index);
 PG_FUNCTION_INFO_V1(hypopg_relation_size);
 PG_FUNCTION_INFO_V1(hypopg_get_indexdef);
 
-static hypoEntry *hypo_newEntry(Oid relid, char *accessMethod, int ncolumns,
+static hypoIndex *hypo_newIndex(Oid relid, char *accessMethod, int ncolumns,
 			  List *options);
 static Oid	hypo_getNewOid(Oid relid);
-static void hypo_addEntry(hypoEntry *entry);
+static void hypo_addIndex(hypoIndex *entry);
 
-static void hypo_entry_reset(void);
-static const hypoEntry *hypo_entry_store_parsetree(IndexStmt *node,
+static void hypo_index_reset(void);
+static const hypoIndex *hypo_index_store_parsetree(IndexStmt *node,
 						   const char *queryString);
-static bool hypo_entry_remove(Oid indexid);
-static void hypo_entry_pfree(hypoEntry *entry);
+static bool hypo_index_remove(Oid indexid);
+static void hypo_index_pfree(hypoIndex *entry);
 
 static void
 hypo_utility_hook(
@@ -230,15 +230,15 @@ static void hypo_injectHypotheticalIndex(PlannerInfo *root,
 							 bool inhparent,
 							 RelOptInfo *rel,
 							 Relation relation,
-							 hypoEntry *entry);
+							 hypoIndex *entry);
 static bool hypo_query_walker(Node *node);
 
-static void hypo_set_indexname(hypoEntry *entry, char *indexname);
-static void hypo_estimate_index_simple(hypoEntry *entry,
+static void hypo_set_indexname(hypoIndex *entry, char *indexname);
+static void hypo_estimate_index_simple(hypoIndex *entry,
 						   BlockNumber *pages, double *tuples);
-static void hypo_estimate_index(hypoEntry *entry, RelOptInfo *rel);
-static int hypo_estimate_index_colsize(hypoEntry *entry, int col);
-static bool hypo_can_return(hypoEntry *entry, Oid atttype, int i, char *amname);
+static void hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel);
+static int hypo_estimate_index_colsize(hypoIndex *entry, int col);
+static bool hypo_can_return(hypoIndex *entry, Oid atttype, int i, char *amname);
 static void hypo_discover_am(char *amname, Oid oid);
 
 void
@@ -293,15 +293,15 @@ _PG_fini(void)
 }
 
 /*
- * palloc a new hypoEntry, and give it a new OID, and some other global stuff.
+ * palloc a new hypoIndex, and give it a new OID, and some other global stuff.
  * This function also parse index storage options (if any) to check if they're
  * valid.
  */
-static hypoEntry *
-hypo_newEntry(Oid relid, char *accessMethod, int ncolumns, List *options)
+static hypoIndex *
+hypo_newIndex(Oid relid, char *accessMethod, int ncolumns, List *options)
 {
 	/* must be declared "volatile", because used in a PG_CATCH() */
-	hypoEntry  *volatile entry;
+	hypoIndex  *volatile entry;
 	MemoryContext oldcontext;
 	HeapTuple	tuple;
 
@@ -326,7 +326,7 @@ hypo_newEntry(Oid relid, char *accessMethod, int ncolumns, List *options)
 
 	oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
 
-	entry = palloc0(sizeof(hypoEntry));
+	entry = palloc0(sizeof(hypoIndex));
 
 	entry->relam = HeapTupleGetOid(tuple);
 
@@ -441,7 +441,7 @@ hypo_newEntry(Oid relid, char *accessMethod, int ncolumns, List *options)
 	PG_CATCH();
 	{
 		/* Free what was palloc'd in HypoMemoryContext */
-		hypo_entry_pfree(entry);
+		hypo_index_pfree(entry);
 
 		PG_RE_THROW();
 	}
@@ -484,42 +484,42 @@ hypo_getNewOid(Oid relid)
 	return newoid;
 }
 
-/* Add an hypoEntry to hypoEntries */
+/* Add an hypoIndex to hypoIndexes */
 
 static void
-hypo_addEntry(hypoEntry *entry)
+hypo_addIndex(hypoIndex *entry)
 {
 	MemoryContext oldcontext;
 
 	oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
 
-	entries = lappend(entries, entry);
+	hypoIndexes = lappend(hypoIndexes, entry);
 
 	MemoryContextSwitchTo(oldcontext);
 }
 
 /*
- * Remove cleanly all hypothetical indexes by calling hypo_entry_remove() on
- * each entry. hypo_entry_remove() function pfree all allocated memory
+ * Remove cleanly all hypothetical indexes by calling hypo_index_remove() on
+ * each entry. hypo_index_remove() function pfree all allocated memory
  */
 static void
-hypo_entry_reset(void)
+hypo_index_reset(void)
 {
 	ListCell   *lc;
 
 	/*
-	 * The cell is removed in hypo_entry_remove(), so we can't iterate using
+	 * The cell is removed in hypo_index_remove(), so we can't iterate using
 	 * standard foreach / lnext macros.
 	 */
-	while ((lc = list_head(entries)) != NULL)
+	while ((lc = list_head(hypoIndexes)) != NULL)
 	{
-		hypoEntry  *entry = (hypoEntry *) lfirst(lc);
+		hypoIndex  *entry = (hypoIndex *) lfirst(lc);
 
-		hypo_entry_remove(entry->oid);
+		hypo_index_remove(entry->oid);
 	}
 
-	list_free(entries);
-	entries = NIL;
+	list_free(hypoIndexes);
+	hypoIndexes = NIL;
 	return;
 }
 
@@ -528,11 +528,11 @@ hypo_entry_reset(void)
  * is where all the hypothetic index creation is done, except the index size
  * estimation.
  */
-static const hypoEntry *
-hypo_entry_store_parsetree(IndexStmt *node, const char *queryString)
+static const hypoIndex *
+hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 {
 	/* must be declared "volatile", because used in a PG_CATCH() */
-	hypoEntry  *volatile entry;
+	hypoIndex  *volatile entry;
 	Form_pg_attribute attform;
 	Oid			relid;
 	StringInfoData indexRelationName;
@@ -567,7 +567,7 @@ hypo_entry_store_parsetree(IndexStmt *node, const char *queryString)
 	appendStringInfo(&indexRelationName, "%s", node->relation->relname);
 
 	/* now create the hypothetical index entry */
-	entry = hypo_newEntry(relid, node->accessMethod, ncolumns,
+	entry = hypo_newIndex(relid, node->accessMethod, ncolumns,
 						  node->options);
 
 	PG_TRY();
@@ -877,7 +877,7 @@ hypo_entry_store_parsetree(IndexStmt *node, const char *queryString)
 	PG_CATCH();
 	{
 		/* Free what was palloc'd in HypoMemoryContext */
-		hypo_entry_pfree(entry);
+		hypo_index_pfree(entry);
 
 		PG_RE_THROW();
 	}
@@ -942,37 +942,37 @@ hypo_entry_store_parsetree(IndexStmt *node, const char *queryString)
 
 	hypo_set_indexname(entry, indexRelationName.data);
 
-	hypo_addEntry(entry);
+	hypo_addIndex(entry);
 
 	return entry;
 }
 
 /*
  * Remove an hypothetical index from the list of hypothetical indexes.
- * pfree (by calling hypo_entry_pfree) all memory that has been allocated.
+ * pfree (by calling hypo_index_pfree) all memory that has been allocated.
  */
 static bool
-hypo_entry_remove(Oid indexid)
+hypo_index_remove(Oid indexid)
 {
 	ListCell   *lc;
 
-	foreach(lc, entries)
+	foreach(lc, hypoIndexes)
 	{
-		hypoEntry  *entry = (hypoEntry *) lfirst(lc);
+		hypoIndex  *entry = (hypoIndex *) lfirst(lc);
 
 		if (entry->oid == indexid)
 		{
-			entries = list_delete_ptr(entries, entry);
-			hypo_entry_pfree(entry);
+			hypoIndexes = list_delete_ptr(hypoIndexes, entry);
+			hypo_index_pfree(entry);
 			return true;
 		}
 	}
 	return false;
 }
 
-/* pfree all allocated memory for within an hypoEntry and the entry itself. */
+/* pfree all allocated memory for within an hypoIndex and the entry itself. */
 static void
-hypo_entry_pfree(hypoEntry *entry)
+hypo_index_pfree(hypoIndex *entry)
 {
 	/* pfree all memory that has been allocated */
 	pfree(entry->indexname);
@@ -1125,11 +1125,11 @@ hypo_executorEnd_hook(QueryDesc *queryDesc)
 
 /*--------------------------------------------------
  * Add an hypothetical index to the list of indexes.
- * Caller should have check that the specified hypoEntry does belong to the
+ * Caller should have check that the specified hypoIndex does belong to the
  * specified relation.  This function also assume that the specified entry
  * already contains every needed information, so we just basically need to copy
- * it from the hypoEntry to the new IndexOptInfo.  Every specific handling is
- * done at store time (ie.  hypo_entry_store_parsetree).  The only exception is
+ * it from the hypoIndex to the new IndexOptInfo.  Every specific handling is
+ * done at store time (ie.  hypo_index_store_parsetree).  The only exception is
  * the size estimation, recomputed verytime, as it needs up to date statistics.
  */
 static void
@@ -1138,7 +1138,7 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 							 bool inhparent,
 							 RelOptInfo *rel,
 							 Relation relation,
-							 hypoEntry *entry)
+							 hypoIndex *entry)
 {
 	IndexOptInfo *index;
 	int			ncolumns,
@@ -1194,7 +1194,7 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 
 	/*
 	 * Fetch the ordering information for the index, if any. This is handled
-	 * in hypo_entry_store_parsetree(). Again, adapted from plancat.c -
+	 * in hypo_index_store_parsetree(). Again, adapted from plancat.c -
 	 * get_relation_info()
 	 */
 	if (entry->relam == BTREE_AM_OID)
@@ -1244,7 +1244,7 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 	index->amhasgettuple = entry->amhasgettuple;
 	index->amhasgetbitmap = entry->amhasgetbitmap;
 
-	/* these has already been handled in hypo_entry_store_parsetree() if any */
+	/* these has already been handled in hypo_index_store_parsetree() if any */
 	index->indexprs = list_copy(entry->indexprs);
 	index->indpred = list_copy(entry->indpred);
 	index->predOK = false;		/* will be set later in indxpath.c */
@@ -1303,9 +1303,9 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 		{
 			ListCell   *lc;
 
-			foreach(lc, entries)
+			foreach(lc, hypoIndexes)
 			{
-				hypoEntry  *entry = (hypoEntry *) lfirst(lc);
+				hypoIndex  *entry = (hypoIndex *) lfirst(lc);
 
 				if (entry->relid == relationObjectId)
 				{
@@ -1343,9 +1343,9 @@ hypo_explain_get_index_name_hook(Oid indexId)
 		 */
 		ListCell   *lc;
 
-		foreach(lc, entries)
+		foreach(lc, hypoIndexes)
 		{
-			hypoEntry  *entry = (hypoEntry *) lfirst(lc);
+			hypoIndex  *entry = (hypoIndex *) lfirst(lc);
 
 			if (entry->oid == indexId)
 			{
@@ -1362,7 +1362,7 @@ hypo_explain_get_index_name_hook(Oid indexId)
 Datum
 hypopg_reset(PG_FUNCTION_ARGS)
 {
-	hypo_entry_reset();
+	hypo_index_reset();
 	PG_RETURN_VOID();
 }
 
@@ -1405,11 +1405,11 @@ hypopg(PG_FUNCTION_ARGS)
 
 	MemoryContextSwitchTo(oldcontext);
 
-	foreach(lc, entries)
+	foreach(lc, hypoIndexes)
 	{
-		hypoEntry  *entry = (hypoEntry *) lfirst(lc);
-		Datum		values[HYPO_NB_COLS];
-		bool		nulls[HYPO_NB_COLS];
+		hypoIndex  *entry = (hypoIndex *) lfirst(lc);
+		Datum		values[HYPO_INDEX_NB_COLS];
+		bool		nulls[HYPO_INDEX_NB_COLS];
 		ListCell   *lc2;
 		StringInfoData	exprsString;
 		int			i = 0;
@@ -1459,7 +1459,7 @@ hypopg(PG_FUNCTION_ARGS)
 			nulls[i++] = true;
 
 		values[i++] = ObjectIdGetDatum(entry->relam);
-		Assert(i == HYPO_NB_COLS);
+		Assert(i == HYPO_INDEX_NB_COLS);
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
@@ -1516,9 +1516,9 @@ hypopg_create_index(PG_FUNCTION_ARGS)
 	foreach(parsetree_item, parsetree_list)
 	{
 		Node	   *parsetree = (Node *) lfirst(parsetree_item);
-		Datum		values[HYPO_CREATE_COLS];
-		bool		nulls[HYPO_CREATE_COLS];
-		const hypoEntry *entry;
+		Datum		values[HYPO_INDEX_CREATE_COLS];
+		bool		nulls[HYPO_INDEX_CREATE_COLS];
+		const hypoIndex *entry;
 
 		memset(values, 0, sizeof(values));
 		memset(nulls, 0, sizeof(nulls));
@@ -1534,7 +1534,7 @@ hypopg_create_index(PG_FUNCTION_ARGS)
 		}
 		else
 		{
-			entry = hypo_entry_store_parsetree((IndexStmt *) parsetree, sql);
+			entry = hypo_index_store_parsetree((IndexStmt *) parsetree, sql);
 			if (entry != NULL)
 			{
 				values[0] = ObjectIdGetDatum(entry->oid);
@@ -1560,7 +1560,7 @@ hypopg_drop_index(PG_FUNCTION_ARGS)
 {
 	Oid			indexid = PG_GETARG_OID(0);
 
-	PG_RETURN_BOOL(hypo_entry_remove(indexid));
+	PG_RETURN_BOOL(hypo_index_remove(indexid));
 }
 
 /*
@@ -1576,9 +1576,9 @@ hypopg_relation_size(PG_FUNCTION_ARGS)
 
 	pages = 0;
 	tuples = 0;
-	foreach(lc, entries)
+	foreach(lc, hypoIndexes)
 	{
-		hypoEntry  *entry = (hypoEntry *) lfirst(lc);
+		hypoIndex  *entry = (hypoIndex *) lfirst(lc);
 
 		if (entry->oid == indexid)
 		{
@@ -1590,7 +1590,7 @@ hypopg_relation_size(PG_FUNCTION_ARGS)
 }
 
 /*
- * Deparse an hypoEntry, indentified by its indexid to the actual CREATE INDEX
+ * Deparse an hypoIndex, indentified by its indexid to the actual CREATE INDEX
  * command.
  *
  * Heavilty inspired on pg_get_indexdef_worker()
@@ -1602,14 +1602,14 @@ hypopg_get_indexdef(PG_FUNCTION_ARGS)
 	Oid				indexid = PG_GETARG_OID(0);
 	ListCell	   *indexpr_item;
 	StringInfoData	buf;
-	hypoEntry	   *entry = NULL;
+	hypoIndex	   *entry = NULL;
 	ListCell	   *lc;
 	List		   *context;
 	int				keyno, cpt = 0;
 
-	foreach(lc, entries)
+	foreach(lc, hypoIndexes)
 	{
-		entry = (hypoEntry *) lfirst(lc);
+		entry = (hypoIndex *) lfirst(lc);
 
 		if (entry->oid == indexid)
 			break;
@@ -1747,7 +1747,7 @@ hypopg_get_indexdef(PG_FUNCTION_ARGS)
  * ending \0
  */
 static void
-hypo_set_indexname(hypoEntry *entry, char *indexname)
+hypo_set_indexname(hypoIndex *entry, char *indexname)
 {
 	char		oid[12];		/* store <oid>, oid shouldn't be more than
 								 * 9999999999 */
@@ -1768,10 +1768,10 @@ hypo_set_indexname(hypoEntry *entry, char *indexname)
 }
 
 /*
- * Fill the pages and tuples information for a given hypoentry.
+ * Fill the pages and tuples information for a given hypoIndex.
  */
 static void
-hypo_estimate_index_simple(hypoEntry *entry, BlockNumber *pages, double *tuples)
+hypo_estimate_index_simple(hypoIndex *entry, BlockNumber *pages, double *tuples)
 {
 	RelOptInfo *rel;
 	Relation	relation;
@@ -1814,11 +1814,11 @@ hypo_estimate_index_simple(hypoEntry *entry, BlockNumber *pages, double *tuples)
 
 
 /*
- * Fill the pages and tuples information for a given hypoentry and a given
+ * Fill the pages and tuples information for a given hypoIndex and a given
  * RelOptInfo
  */
 static void
-hypo_estimate_index(hypoEntry *entry, RelOptInfo *rel)
+hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel)
 {
 	int			i,
 				ind_avg_width = 0;
@@ -2042,7 +2042,7 @@ hypo_estimate_index(hypoEntry *entry, RelOptInfo *rel)
  * Estimate a single index's column of an hypothetical index.
  */
 static int
-hypo_estimate_index_colsize(hypoEntry *entry, int col)
+hypo_estimate_index_colsize(hypoIndex *entry, int col)
 {
 	int i, pos;
 	Node *expr;
@@ -2105,7 +2105,7 @@ hypo_estimate_index_colsize(hypoEntry *entry, int col)
  * can't be done without a real Relation, so try to find it out
  */
 static bool
-hypo_can_return(hypoEntry *entry, Oid atttype, int i, char *amname)
+hypo_can_return(hypoIndex *entry, Oid atttype, int i, char *amname)
 {
 	/* no amcanreturn entry, am does not handle IOS */
 #if PG_VERSION_NUM >= 90600
