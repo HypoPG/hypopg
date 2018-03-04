@@ -8,15 +8,21 @@
 
 SET client_encoding = 'UTF8';
 
-CREATE FUNCTION hypopg_reset_index()
-    RETURNS void
-    LANGUAGE C VOLATILE COST 100
-AS '$libdir/hypopg', 'hypopg_reset_index';
+-- General functions
+--
 
 CREATE FUNCTION hypopg_reset()
     RETURNS void
     LANGUAGE C VOLATILE COST 100
 AS '$libdir/hypopg', 'hypopg_reset';
+
+-- Hypothetical indexes related functions
+--
+
+CREATE FUNCTION hypopg_reset_index()
+    RETURNS void
+    LANGUAGE C VOLATILE COST 100
+AS '$libdir/hypopg', 'hypopg_reset_index';
 
 CREATE FUNCTION
 hypopg_create_index(IN sql_order text, OUT indexrelid oid, OUT indexname text)
@@ -63,3 +69,32 @@ hypopg_get_indexdef(IN indexid oid)
     RETURNS text
 LANGUAGE C STRICT VOLATILE COST 100
 AS '$libdir/hypopg', 'hypopg_get_indexdef';
+
+-- Hypothetical partitioning related functions
+--
+
+CREATE FUNCTION
+hypopg_add_partition(IN partition_name name, IN partition_of_clause text,
+    IN partition_by_clause text DEFAULT NULL,
+    OUT relid oid, OUT tablename text)
+    RETURNS SETOF record
+    LANGUAGE C VOLATILE COST 100
+AS '$libdir/hypopg', 'hypopg_add_partition';
+
+CREATE FUNCTION
+hypopg_partition_table(IN tablename regclass, IN partition_by_clause text)
+    RETURNS bool
+    LANGUAGE C STRICT VOLATILE COSt 100
+AS '$libdir/hypopg', 'hypopg_partition_table';
+
+CREATE FUNCTION hypopg_reset_table()
+    RETURNS void
+    LANGUAGE C VOLATILE COST 100
+AS '$libdir/hypopg', 'hypopg_reset_table';
+
+CREATE FUNCTION hypopg_table(OUT relid oid, OUT tablename text,
+    OUT parentid oid,
+    OUT partition_by_clause text, OUT partition_of_clause text)
+    RETURNS SETOF record
+    LANGUAGE c COST 100
+AS '$libdir/hypopg', 'hypopg_table';
