@@ -13,6 +13,8 @@
  *-------------------------------------------------------------------------
  */
 
+#include <math.h>
+
 #include "postgres.h"
 #include "fmgr.h"
 
@@ -24,15 +26,24 @@
 #include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_inherits_fn.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
+#include "nodes/relation.h"
+#include "nodes/nodes.h"
+#include "optimizer/clauses.h"
+#include "optimizer/cost.h"
+#include "optimizer/predtest.h"
+#include "optimizer/prep.h"
+#include "parser/parsetree.h"
 #include "parser/parse_utilcmd.h"
 #include "rewrite/rewriteManip.h"
 #include "tcop/utility.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
@@ -74,13 +85,25 @@ static Oid hypo_table_find_parent_oid(Oid parentid);
 static Oid hypo_table_find_root_oid(hypoTable *entry);
 static hypoTable *hypo_find_table(Oid tableid);
 static bool hypo_table_name_is_hypothetical(const char *name);
-static bool hypo_table_oid_is_hypothetical(Oid relid);
 static void hypo_table_pfree(hypoTable *entry);
 static bool hypo_table_remove(Oid tableid);
 static const hypoTable *hypo_table_store_parsetree(CreateStmt *node,
 						   const char *queryString, Oid parentid);
 static PartitionBoundSpec *hypo_transformPartitionBound(ParseState *pstate,
 		hypoTable *parent, PartitionBoundSpec *spec);
+static void hypo_partition_table(PlannerInfo *root, RelOptInfo *rel, 
+				 hypoTable *entry);
+static List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, 
+					    hypoTable *parent);
+static List *hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec);
+static List *hypo_get_qual_for_hash(hypoTable *parent, PartitionBoundSpec *spec);
+static List *hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec);
+static List *hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, 
+									 bool for_default);
+
+#define HYPO_RTI_IS_TAGGED(rti, root) (planner_rt_fetch(rti, root)->security_barrier)
+#define HYPO_TAG_RTI(rti, root) (planner_rt_fetch(rti, root)->security_barrier = true)
+
 
 
 /* Add an hypoTable to hypoTables */
@@ -651,6 +674,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 				elog(ERROR, "unexpected partition strategy: %d",
 					 (int) key->strategy);
 		}
+		result->boundinfo = boundinfo;
 
 		/*
 		 * Now assign OIDs from the original array into mapped indexes of the
@@ -805,7 +829,7 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 			key->parttypid[i] = exprType(lfirst(partexprs_item));
 			key->parttypmod[i] = exprTypmod(lfirst(partexprs_item));
 			key->parttypcoll[i] = exprCollation(lfirst(partexprs_item));
-
+			
 			partexprs_item = lnext(partexprs_item);
 		}
 		get_typlenbyvalalign(key->parttypid[i],
@@ -879,10 +903,13 @@ hypo_generate_part_scheme(CreateStmt *stmt, PartitionKey partkey, Oid
 	memcpy(part_scheme->partopcintype, partkey->partopcintype,
 		   sizeof(Oid) * partnatts);
 
-	part_scheme->parttypcoll = (Oid *) palloc(sizeof(Oid) * partnatts);
-	memcpy(part_scheme->parttypcoll, partkey->parttypcoll,
+	part_scheme->partcollation = (Oid *) palloc(sizeof(Oid) * partnatts);
+	memcpy(part_scheme->partcollation, partkey->partcollation,
 		   sizeof(Oid) * partnatts);
-
+	//part_scheme->parttypcoll = (Oid *) palloc(sizeof(Oid) * partnatts);
+	//memcpy(part_scheme->parttypcoll, partkey->parttypcoll,
+	//	   sizeof(Oid) * partnatts);
+	
 	part_scheme->parttyplen = (int16 *) palloc(sizeof(int16) * partnatts);
 	memcpy(part_scheme->parttyplen, partkey->parttyplen,
 		   sizeof(int16) * partnatts);
@@ -1305,7 +1332,7 @@ hypo_table_name_is_hypothetical(const char *name)
 /*
  * Is the given relid an hypothetical partition ?
  */
-static bool
+bool
 hypo_table_oid_is_hypothetical(Oid relid)
 {
 	ListCell   *lc;
@@ -1332,7 +1359,8 @@ hypo_table_pfree(hypoTable *entry)
 	{
 		pfree(entry->part_scheme->partopfamily);
 		pfree(entry->part_scheme->partopcintype);
-		pfree(entry->part_scheme->parttypcoll);
+		//pfree(entry->part_scheme->parttypcoll);
+		pfree(entry->part_scheme->partcollation);
 		pfree(entry->part_scheme->parttyplen);
 		pfree(entry->part_scheme);
 	}
@@ -1352,6 +1380,7 @@ hypo_table_pfree(hypoTable *entry)
 		pfree(entry->partkey->parttypbyval);
 		pfree(entry->partkey->parttypalign);
 		pfree(entry->partkey->parttypcoll);
+		pfree(entry->partkey->partcollation);
 		pfree(entry->partkey);
 	}
 
@@ -1696,6 +1725,936 @@ hypo_transformPartitionBound(ParseState *pstate, hypoTable *parent,
 
 	return result_spec;
 }
+
+
+/*
+ * If this rel is the table we want to partition hypothetically, we inject
+ * the hypothetical partitioning to this rel
+ */
+void
+hypo_injectHypotheticalPartitioning(PlannerInfo *root, 
+				    Oid relationObjectId, 
+				    RelOptInfo *rel)
+{
+  hypoTable *parent;
+
+  Assert(HYPO_ENABLED());
+  Assert(hypo_table_oid_is_hypothetical(relationObjectId));
+		
+  parent = hypo_find_table(relationObjectId);
+
+  /*
+   * if this rel is parent, prepare some structures to inject
+   * hypothetical partitioning
+   */
+  if(!HYPO_RTI_IS_TAGGED(rel->relid,root))
+    {
+      List *inhoids;
+      int nparts, i;
+      int oldsize = root->simple_rel_array_size;
+      RangeTblEntry *rte;
+      List *partitioned_child_rels = NIL;
+      ListCell *cell;
+      AppendRelInfo *appinfo;
+      PartitionedChildRelInfo *pcinfo;
+      
+      /* get all of the partition oids */
+      inhoids = hypo_find_inheritance_children(parent);
+      nparts = list_length(inhoids);
+	  
+      /* resize and clean rte and rel arrays */
+      root->simple_rel_array_size = oldsize + nparts + 1;
+      root->simple_rel_array = (RelOptInfo **)
+	repalloc(root->simple_rel_array, 
+		 root->simple_rel_array_size *
+		 sizeof(RelOptInfo *));
+      root->simple_rte_array = (RangeTblEntry **)
+	repalloc(root->simple_rte_array, 
+		 root->simple_rel_array_size *
+		 sizeof(RangeTblEntry *));
+      
+      for (i=oldsize; i<root->simple_rel_array_size; i++)
+	{
+	  root->simple_rel_array[i] = NULL;
+	  root->simple_rte_array[i] = NULL;
+	}
+      
+      /* rewrite and restore this rel's rte */
+      rte = root->simple_rte_array[rel->relid];
+      rte->relkind = RELKIND_PARTITIONED_TABLE;
+      rte->inh = true;
+	  
+      root->simple_rte_array[rel->relid] = rte;
+      root->simple_rte_array[oldsize] = rte;
+      
+      partitioned_child_rels = lappend_int(partitioned_child_rels, 
+					   oldsize);
+      root->parse->rtable = lappend(root->parse->rtable, 
+				    root->simple_rte_array[oldsize]);
+      
+      HYPO_TAG_RTI(rel->relid, root);
+      HYPO_TAG_RTI(oldsize, root);
+      
+
+      /* 
+       * create RangeTblEntries and AppendRelInfos hypothetically
+       * for all hypothetical partitions 
+       */
+      i = 1;
+      foreach(cell, inhoids)
+	{	
+	  int newrelid;
+	  Oid childOid = lfirst_oid(cell);
+	  hypoTable *child;
+	  RangeTblEntry *childrte;
+	  Relation parentrel;
+	  
+	  child = hypo_find_table(childOid);
+	  newrelid = oldsize + i;
+	  
+	  childrte = copyObject(rte);
+	  childrte->rtekind = RTE_RELATION;
+	  childrte->relid  = relationObjectId; //originalOID;
+	  childrte->relkind = RELKIND_RELATION;
+	  childrte->inh = false;
+	  if(!childrte->alias)
+	    childrte->alias = makeNode(Alias);
+	  childrte->alias->aliasname = child->tablename;
+	  /* FIXME maybe use a mapping array here instead of rte->values_lists*/
+	  childrte->values_lists = list_make1_oid(child->oid); //partitionOID
+	  root->simple_rte_array[newrelid] = childrte;
+	  HYPO_TAG_RTI(newrelid, root);
+	      
+	  appinfo = makeNode(AppendRelInfo);
+	  appinfo->parent_relid = rel->relid;
+	  appinfo->child_relid = newrelid;
+	  parentrel = heap_open(relationObjectId, NoLock);
+	  appinfo->parent_reltype = parentrel->rd_rel->reltype;
+	  appinfo->child_reltype = parentrel->rd_rel->reltype;
+	  make_inh_translation_list(parentrel, parentrel, newrelid, 
+				    &appinfo->translated_vars);
+	  heap_close(parentrel, NoLock);
+	  appinfo->parent_reloid = relationObjectId;
+	  root->append_rel_list = lappend(root->append_rel_list, 
+					  appinfo);
+	  root->parse->rtable = lappend(root->parse->rtable, 
+					root->simple_rte_array[newrelid]);
+	  
+	  i++;
+	}
+      
+      /* create pcinfo hypothetically for this rel */
+      pcinfo = makeNode(PartitionedChildRelInfo);
+      pcinfo->parent_relid = oldsize;
+      pcinfo->child_rels = partitioned_child_rels;
+      root->pcinfo_list = lappend(root->pcinfo_list, pcinfo);
+      
+      /* add partition info to this rel */
+      hypo_partition_table(root, rel, parent);
+    }
+  
+  
+  /* 
+   * if this rel is partition, rewrite tuples and pages using selectivity
+   * which is computed according to its partition constraints
+   */
+  if (rel->reloptkind != RELOPT_BASEREL
+      &&HYPO_RTI_IS_TAGGED(rel->relid,root))
+    {
+      List *constraints;
+      PlannerInfo *root_dummy;
+      Selectivity selectivity;
+      double pages;
+
+      /* get its partition constraints */
+      constraints = hypo_get_partition_constraints(root, rel, parent);
+      
+      /* 
+       * to compute selectivity, make dummy PlannerInfo and then rewrite
+       * tuples and pages using this selectivity
+       */
+      root_dummy = makeNode(PlannerInfo);
+      root_dummy = root;
+      root_dummy->simple_rel_array[rel->relid] = rel;
+      
+      selectivity = clauselist_selectivity(root_dummy, 
+					   constraints,
+					   0,
+					   JOIN_INNER,
+					   NULL);
+      
+      pages = ceil(rel->pages * selectivity);
+      rel->pages = (BlockNumber)pages;
+      rel->tuples = clamp_row_est(rel->tuples * selectivity);
+    }
+}
+
+
+/*
+ * If this rel is need not be scanned, we have to mark it as dummy to omit it 
+ * from the appendrel
+ * 
+ * It is inspired on relation_excluded_by_constraints 
+ */
+void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
+				  Index rti, RangeTblEntry *rte)
+{
+  hypoTable *parent;
+  List *constraints;		
+  List *safe_constraints = NIL;
+  ListCell *lc;
+
+  Assert(HYPO_ENABLED());
+  Assert(hypo_table_oid_is_hypothetical(rte->relid));
+  Assert(rte->relkind == 'r');
+
+  parent = hypo_find_table(rte->relid);
+      
+  /* get its partition constraints */
+  constraints = hypo_get_partition_constraints(root, rel, parent);
+      
+  /*
+   * We do not currently enforce that CHECK constraints contain only
+   * immutable functions, so it's necessary to check here. We daren't draw
+   * conclusions from plan-time evaluation of non-immutable functions. Since
+   * they're ANDed, we can just ignore any mutable constraints in the list,
+   * and reason about the rest.
+   */
+  foreach(lc, constraints)
+    {
+      Node       *pred = (Node *) lfirst(lc);
+      
+      if (!contain_mutable_functions(pred))
+	safe_constraints = lappend(safe_constraints, pred);
+    }
+      
+  /* if this partition need not be scanned, we call the set_dummy_rel_pathlist()
+   * to mark it as dummy */
+  if (predicate_refuted_by(safe_constraints, rel->baserestrictinfo, false))
+    set_dummy_rel_pathlist(rel);
+		
+
+  /*
+    TODO: re-estimate parent size just like set_append_rel_size()
+  */
+      
+   
+}
+
+
+/*
+ * If this is the table we want to hypothetically partition, modifies its
+ * metadata to add partitioning information
+ */
+static void
+hypo_partition_table(PlannerInfo *root, RelOptInfo *rel, hypoTable *entry)
+{	
+	PartitionDesc partdesc;
+	PartitionKey partkey;
+	
+	partdesc = hypo_generate_partitiondesc(entry);
+	partkey = entry->partkey;
+	rel->part_scheme = entry->part_scheme;
+	rel->boundinfo = partition_bounds_copy(partdesc->boundinfo, partkey);
+	rel->nparts = partdesc->nparts;
+	hypo_generate_partition_key_exprs(entry, rel);
+}
+
+
+/*
+ * Returns a List of partition constraints from its partition bound spec
+ *
+ * It is inspired on get_relation_constraints()
+ */
+static List *
+hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *parent)
+{	
+	ListCell *lc; 
+	Oid childOid;
+	hypoTable *child;
+	PartitionBoundSpec *spec;
+	List *constraints;
+
+	/* FIXME maybe use a mapping array here instead of rte->values_lists*/
+	lc = list_head(planner_rt_fetch(rel->relid, root)->values_lists);
+	childOid = lfirst_oid(lc);
+	child = hypo_find_table(childOid);
+	spec = child->boundspec;
+	
+	/* get its partition constraints */
+	constraints = hypo_get_qual_from_partbound(parent,spec);
+			
+	if (constraints)
+	{
+		/*
+		 * Run each expression through const-simplification and
+		 * canonicalization similar to check constraints.
+		 */
+		constraints = (List *) eval_const_expressions(root, (Node *) constraints);
+		/* FIXME this func will be modified at pg11 */
+		constraints = (List *) canonicalize_qual((Expr *) constraints);
+		
+		/* Fix Vars to have the desired varno */
+		if (rel->relid != 1)
+			ChangeVarNodes((Node *) constraints, 1, rel->relid, 0);
+
+	}	
+	return constraints;
+}
+
+
+
+/*
+ * Return the list of executable expressions as partition constraint 
+ *
+ * Heavily inspired on get_qual_from_partbound
+ */
+static List *
+hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec)
+{
+	PartitionKey key = parent->partkey;
+	List *my_qual = NIL;
+
+	Assert(key != NULL);
+	
+	switch (key->strategy)
+	{
+		
+	case PARTITION_STRATEGY_HASH:
+		Assert(spec->strategy == PARTITION_STRATEGY_HASH);
+		my_qual = hypo_get_qual_for_hash(parent, spec);
+		break;
+		
+	case PARTITION_STRATEGY_LIST:
+		Assert(spec->strategy == PARTITION_STRATEGY_LIST);
+		my_qual = hypo_get_qual_for_list(parent, spec);
+		break;
+
+	case PARTITION_STRATEGY_RANGE:
+		Assert(spec->strategy == PARTITION_STRATEGY_RANGE);
+		my_qual = hypo_get_qual_for_range(parent, spec, false);
+		break;
+
+	default:
+		elog(ERROR, "unexpected partition strategy: %d",
+			 (int) key->strategy);
+	}
+	
+	return my_qual;
+}
+
+
+/*
+ * Returns a CHECK constraint expression to use as a hash partition's
+ * constraint, given the parent entry and partition bound structure.
+ *
+ * Heavily inspired on get_qual_for_hash
+ */
+static List *
+hypo_get_qual_for_hash(hypoTable *parent, PartitionBoundSpec *spec)
+{
+	PartitionKey key = parent->partkey;
+	FuncExpr   *fexpr;
+	Node	   *relidConst;
+	Node	   *modulusConst;
+	Node	   *remainderConst;
+	List	   *args;
+	ListCell   *partexprs_item;
+	int			i;
+
+	/* Fixed arguments. */
+	relidConst = (Node *) makeConst(OIDOID,
+									-1,
+									InvalidOid,
+									sizeof(Oid),
+									ObjectIdGetDatum(parent->oid), //parentid?
+									false,
+									true);
+
+	modulusConst = (Node *) makeConst(INT4OID,
+									  -1,
+									  InvalidOid,
+									  sizeof(int32),
+									  Int32GetDatum(spec->modulus),
+									  false,
+									  true);
+
+	remainderConst = (Node *) makeConst(INT4OID,
+										-1,
+										InvalidOid,
+										sizeof(int32),
+										Int32GetDatum(spec->remainder),
+										false,
+										true);
+
+	args = list_make3(relidConst, modulusConst, remainderConst);
+	partexprs_item = list_head(key->partexprs);
+
+	/* Add an argument for each key column. */
+	for (i = 0; i < key->partnatts; i++)
+	{
+		Node	   *keyCol;
+
+		/* Left operand */
+		if (key->partattrs[i] != 0)
+		{
+			keyCol = (Node *) makeVar(1,
+									  key->partattrs[i],
+									  key->parttypid[i],
+									  key->parttypmod[i],
+									  key->parttypcoll[i],
+									  0);
+		}
+		else
+		{
+			keyCol = (Node *) copyObject(lfirst(partexprs_item));
+			partexprs_item = lnext(partexprs_item);
+		}
+
+		args = lappend(args, keyCol);
+	}
+
+	fexpr = makeFuncExpr(F_SATISFIES_HASH_PARTITION,
+						 BOOLOID,
+						 args,
+						 InvalidOid,
+						 InvalidOid,
+						 COERCE_EXPLICIT_CALL);
+
+	return list_make1(fexpr);
+}
+
+
+
+/*
+ * Returns an implicit-AND list of expressions to use as a list partition's
+ * constraint, given the parent entry and partition bound structure.
+ *
+ * Heavily inspired on get_qual_for_list
+ */
+static List *
+hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec)
+{
+	PartitionKey key = parent->partkey;
+	List	   *result;
+	Expr	   *keyCol;
+	Expr	   *opexpr;
+	NullTest   *nulltest;
+	ListCell   *cell;
+	List	   *elems = NIL;
+	bool		list_has_null = false;
+
+	/*
+	 * Only single-column list partitioning is supported, so we are worried
+	 * only about the partition key with index 0.
+	 */
+	Assert(key->partnatts == 1);
+
+	/* Construct Var or expression representing the partition column */
+	if (key->partattrs[0] != 0)
+		keyCol = (Expr *) makeVar(1,
+								  key->partattrs[0],
+								  key->parttypid[0],
+								  key->parttypmod[0],
+								  key->parttypcoll[0],
+								  0);
+	else
+		keyCol = (Expr *) copyObject(linitial(key->partexprs));
+
+	/*
+	 * For default list partition, collect datums for all the partitions. The
+	 * default partition constraint should check that the partition key is
+	 * equal to none of those.
+	 */
+	if (spec->is_default)
+	{
+		int			i;
+		int			ndatums = 0;
+		PartitionDesc pdesc = hypo_generate_partitiondesc(parent);
+		PartitionBoundInfo boundinfo = pdesc->boundinfo;
+
+		if (boundinfo)
+		{
+			ndatums = boundinfo->ndatums;
+
+			if (partition_bound_accepts_nulls(boundinfo))
+				list_has_null = true;
+		}
+
+		/*
+		 * If default is the only partition, there need not be any partition
+		 * constraint on it.
+		 */
+		if (ndatums == 0 && !list_has_null)
+			return NIL;
+
+		for (i = 0; i < ndatums; i++)
+		{
+			Const	   *val;
+
+			/*
+			 * Construct Const from known-not-null datum.  We must be careful
+			 * to copy the value, because our result has to be able to outlive
+			 * the relcache entry we're copying from.
+			 */
+			val = makeConst(key->parttypid[0],
+							key->parttypmod[0],
+							key->parttypcoll[0],
+							key->parttyplen[0],
+							datumCopy(*boundinfo->datums[i],
+									  key->parttypbyval[0],
+									  key->parttyplen[0]),
+							false,	/* isnull */
+							key->parttypbyval[0]);
+
+			elems = lappend(elems, val);
+		}
+	}
+	else
+	{
+		/*
+		 * Create list of Consts for the allowed values, excluding any nulls.
+		 */
+		foreach(cell, spec->listdatums)
+		{
+			Const	   *val = castNode(Const, lfirst(cell));
+
+			if (val->constisnull)
+				list_has_null = true;
+			else
+				elems = lappend(elems, copyObject(val));
+		}
+	}
+
+	if (elems)
+	{
+		/*
+		 * Generate the operator expression from the non-null partition
+		 * values.
+		 */
+		opexpr = make_partition_op_expr(key, 0, BTEqualStrategyNumber,
+										keyCol, (Expr *) elems);
+	}
+	else
+	{
+		/*
+		 * If there are no partition values, we don't need an operator
+		 * expression.
+		 */
+		opexpr = NULL;
+	}
+
+	if (!list_has_null)
+	{
+		/*
+		 * Gin up a "col IS NOT NULL" test that will be AND'd with the main
+		 * expression.  This might seem redundant, but the partition routing
+		 * machinery needs it.
+		 */
+		nulltest = makeNode(NullTest);
+		nulltest->arg = keyCol;
+		nulltest->nulltesttype = IS_NOT_NULL;
+		nulltest->argisrow = false;
+		nulltest->location = -1;
+
+		result = opexpr ? list_make2(nulltest, opexpr) : list_make1(nulltest);
+	}
+	else
+	{
+		/*
+		 * Gin up a "col IS NULL" test that will be OR'd with the main
+		 * expression.
+		 */
+		nulltest = makeNode(NullTest);
+		nulltest->arg = keyCol;
+		nulltest->nulltesttype = IS_NULL;
+		nulltest->argisrow = false;
+		nulltest->location = -1;
+
+		if (opexpr)
+		{
+			Expr	   *or;
+
+			or = makeBoolExpr(OR_EXPR, list_make2(nulltest, opexpr), -1);
+			result = list_make1(or);
+		}
+		else
+			result = list_make1(nulltest);
+	}
+
+	/*
+	 * Note that, in general, applying NOT to a constraint expression doesn't
+	 * necessarily invert the set of rows it accepts, because NOT (NULL) is
+	 * NULL.  However, the partition constraints we construct here never
+	 * evaluate to NULL, so applying NOT works as intended.
+	 */
+	if (spec->is_default)
+	{
+		result = list_make1(make_ands_explicit(result));
+		result = list_make1(makeBoolExpr(NOT_EXPR, result, -1));
+	}
+
+	return result;
+}
+
+
+/*
+ * Returns an implicit-AND list of expressions to use as a range partition's
+ * constraint, given the parent entry and partition bound structure.
+ *
+ * Heavily inspired on get_qual_for_range
+ */
+static List *
+hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, bool for_default)
+{
+
+	List	   *result = NIL;
+	ListCell   *cell1,
+			   *cell2,
+			   *partexprs_item,
+			   *partexprs_item_saved;
+	int			i,
+				j;
+	PartitionRangeDatum *ldatum,
+			   *udatum;
+	PartitionKey key = parent->partkey;
+	Expr	   *keyCol;
+	Const	   *lower_val,
+			   *upper_val;
+	List	   *lower_or_arms,
+			   *upper_or_arms;
+	int			num_or_arms,
+				current_or_arm;
+	ListCell   *lower_or_start_datum,
+			   *upper_or_start_datum;
+	bool		need_next_lower_arm,
+				need_next_upper_arm;
+	
+	if (spec->is_default)
+	{	
+		List	   *or_expr_args = NIL;
+		PartitionDesc pdesc = hypo_generate_partitiondesc(parent);
+		Oid		   *inhoids = pdesc->oids;
+		int			nparts = pdesc->nparts,
+					i;
+
+		for (i = 0; i < nparts; i++)
+		{
+			Oid			inhrelid = inhoids[i];  //is this a parent oid or dummy child oid? 
+			HeapTuple	tuple;
+			Datum		datum;
+			bool		isnull;
+			PartitionBoundSpec *bspec;
+
+			elog(NOTICE,"inhrelid : %u",inhrelid);
+
+			tuple = SearchSysCache1(RELOID, inhrelid);
+			if (!HeapTupleIsValid(tuple))
+				elog(ERROR, "cache lookup failed for relation %u", inhrelid);
+
+			datum = SysCacheGetAttr(RELOID, tuple,
+									Anum_pg_class_relpartbound,
+									&isnull);
+
+			Assert(!isnull);
+			bspec = (PartitionBoundSpec *)
+				stringToNode(TextDatumGetCString(datum));
+			if (!IsA(bspec, PartitionBoundSpec))
+				elog(ERROR, "expected PartitionBoundSpec");
+
+			if (!bspec->is_default)
+			{
+				List	   *part_qual;
+
+				part_qual = hypo_get_qual_for_range(parent, bspec, true);
+
+				/*
+				 * AND the constraints of the partition and add to
+				 * or_expr_args
+				 */
+				or_expr_args = lappend(or_expr_args, list_length(part_qual) > 1
+									   ? makeBoolExpr(AND_EXPR, part_qual, -1)
+									   : linitial(part_qual));
+			}
+			ReleaseSysCache(tuple);
+		}
+
+		if (or_expr_args != NIL)
+		{
+
+			Expr	   *other_parts_constr;
+
+			/*
+			 * Combine the constraints obtained for non-default partitions
+			 * using OR.  As requested, each of the OR's args doesn't include
+			 * the NOT NULL test for partition keys (which is to avoid its
+			 * useless repetition).  Add the same now.
+			 */
+			other_parts_constr =
+				makeBoolExpr(AND_EXPR,
+							 lappend(get_range_nulltest(key),
+									 list_length(or_expr_args) > 1
+									 ? makeBoolExpr(OR_EXPR, or_expr_args,
+													-1)
+									 : linitial(or_expr_args)),
+							 -1);
+
+			/*
+			 * Finally, the default partition contains everything *NOT*
+			 * contained in the non-default partitions.
+			 */
+			result = list_make1(makeBoolExpr(NOT_EXPR,
+											 list_make1(other_parts_constr), -1));
+		}
+
+		return result;
+	}
+	
+	lower_or_start_datum = list_head(spec->lowerdatums);
+	upper_or_start_datum = list_head(spec->upperdatums);
+	num_or_arms = key->partnatts;
+
+	/*
+	 * If it is the recursive call for default, we skip the get_range_nulltest
+	 * to avoid accumulating the NullTest on the same keys for each partition.
+	 */
+	if (!for_default)
+		result = get_range_nulltest(key);
+
+	/*
+	 * Iterate over the key columns and check if the corresponding lower and
+	 * upper datums are equal using the btree equality operator for the
+	 * column's type.  If equal, we emit single keyCol = common_value
+	 * expression.  Starting from the first column for which the corresponding
+	 * lower and upper bound datums are not equal, we generate OR expressions
+	 * as shown in the function's header comment.
+	 */
+	i = 0;
+	partexprs_item = list_head(key->partexprs);
+	partexprs_item_saved = partexprs_item;	/* placate compiler */
+	forboth(cell1, spec->lowerdatums, cell2, spec->upperdatums)
+	{
+		EState	   *estate;
+		MemoryContext oldcxt;
+		Expr	   *test_expr;
+		ExprState  *test_exprstate;
+		Datum		test_result;
+		bool		isNull;
+
+		ldatum = castNode(PartitionRangeDatum, lfirst(cell1));
+		udatum = castNode(PartitionRangeDatum, lfirst(cell2));
+
+		/*
+		 * Since get_range_key_properties() modifies partexprs_item, and we
+		 * might need to start over from the previous expression in the later
+		 * part of this function, save away the current value.
+		 */
+		partexprs_item_saved = partexprs_item;
+
+		get_range_key_properties(key, i, ldatum, udatum,
+								 &partexprs_item,
+								 &keyCol,
+								 &lower_val, &upper_val);
+
+		/*
+		 * If either value is NULL, the corresponding partition bound is
+		 * either MINVALUE or MAXVALUE, and we treat them as unequal, because
+		 * even if they're the same, there is no common value to equate the
+		 * key column with.
+		 */
+		if (!lower_val || !upper_val)
+			break;
+
+		/* Create the test expression */
+		estate = CreateExecutorState();
+		oldcxt = MemoryContextSwitchTo(estate->es_query_cxt);
+		test_expr = make_partition_op_expr(key, i, BTEqualStrategyNumber,
+										   (Expr *) lower_val,
+										   (Expr *) upper_val);
+		fix_opfuncids((Node *) test_expr);
+		test_exprstate = ExecInitExpr(test_expr, NULL);
+		test_result = ExecEvalExprSwitchContext(test_exprstate,
+												GetPerTupleExprContext(estate),
+												&isNull);
+		MemoryContextSwitchTo(oldcxt);
+		FreeExecutorState(estate);
+
+		/* If not equal, go generate the OR expressions */
+		if (!DatumGetBool(test_result))
+			break;
+
+		/*
+		 * The bounds for the last key column can't be equal, because such a
+		 * range partition would never be allowed to be defined (it would have
+		 * an empty range otherwise).
+		 */
+		if (i == key->partnatts - 1)
+			elog(ERROR, "invalid range bound specification");
+
+		/* Equal, so generate keyCol = lower_val expression */
+		result = lappend(result,
+						 make_partition_op_expr(key, i, BTEqualStrategyNumber,
+												keyCol, (Expr *) lower_val));
+
+		i++;
+	}
+
+	/* First pair of lower_val and upper_val that are not equal. */
+	lower_or_start_datum = cell1;
+	upper_or_start_datum = cell2;
+
+	/* OR will have as many arms as there are key columns left. */
+	num_or_arms = key->partnatts - i;
+	current_or_arm = 0;
+	lower_or_arms = upper_or_arms = NIL;
+	need_next_lower_arm = need_next_upper_arm = true;
+	while (current_or_arm < num_or_arms)
+	{
+		List	   *lower_or_arm_args = NIL,
+				   *upper_or_arm_args = NIL;
+
+		/* Restart scan of columns from the i'th one */
+		j = i;
+		partexprs_item = partexprs_item_saved;
+
+		for_both_cell(cell1, lower_or_start_datum, cell2, upper_or_start_datum)
+		{
+			PartitionRangeDatum *ldatum_next = NULL,
+					   *udatum_next = NULL;
+
+			ldatum = castNode(PartitionRangeDatum, lfirst(cell1));
+			if (lnext(cell1))
+				ldatum_next = castNode(PartitionRangeDatum,
+									   lfirst(lnext(cell1)));
+			udatum = castNode(PartitionRangeDatum, lfirst(cell2));
+			if (lnext(cell2))
+				udatum_next = castNode(PartitionRangeDatum,
+									   lfirst(lnext(cell2)));
+			get_range_key_properties(key, j, ldatum, udatum,
+									 &partexprs_item,
+									 &keyCol,
+									 &lower_val, &upper_val);
+
+			if (need_next_lower_arm && lower_val)
+			{
+				uint16		strategy;
+
+				/*
+				 * For the non-last columns of this arm, use the EQ operator.
+				 * For the last column of this arm, use GT, unless this is the
+				 * last column of the whole bound check, or the next bound
+				 * datum is MINVALUE, in which case use GE.
+				 */
+				if (j - i < current_or_arm)
+					strategy = BTEqualStrategyNumber;
+				else if (j == key->partnatts - 1 ||
+						 (ldatum_next &&
+						  ldatum_next->kind == PARTITION_RANGE_DATUM_MINVALUE))
+					strategy = BTGreaterEqualStrategyNumber;
+				else
+					strategy = BTGreaterStrategyNumber;
+
+				lower_or_arm_args = lappend(lower_or_arm_args,
+											make_partition_op_expr(key, j,
+																   strategy,
+																   keyCol,
+																   (Expr *) lower_val));
+			}
+
+			if (need_next_upper_arm && upper_val)
+			{
+				uint16		strategy;
+
+				/*
+				 * For the non-last columns of this arm, use the EQ operator.
+				 * For the last column of this arm, use LT, unless the next
+				 * bound datum is MAXVALUE, in which case use LE.
+				 */
+				if (j - i < current_or_arm)
+					strategy = BTEqualStrategyNumber;
+				else if (udatum_next &&
+						 udatum_next->kind == PARTITION_RANGE_DATUM_MAXVALUE)
+					strategy = BTLessEqualStrategyNumber;
+				else
+					strategy = BTLessStrategyNumber;
+
+				upper_or_arm_args = lappend(upper_or_arm_args,
+											make_partition_op_expr(key, j,
+																   strategy,
+																   keyCol,
+																   (Expr *) upper_val));
+			}
+
+			/*
+			 * Did we generate enough of OR's arguments?  First arm considers
+			 * the first of the remaining columns, second arm considers first
+			 * two of the remaining columns, and so on.
+			 */
+			++j;
+			if (j - i > current_or_arm)
+			{
+				/*
+				 * We must not emit any more arms if the new column that will
+				 * be considered is unbounded, or this one was.
+				 */
+				if (!lower_val || !ldatum_next ||
+					ldatum_next->kind != PARTITION_RANGE_DATUM_VALUE)
+					need_next_lower_arm = false;
+				if (!upper_val || !udatum_next ||
+					udatum_next->kind != PARTITION_RANGE_DATUM_VALUE)
+					need_next_upper_arm = false;
+				break;
+			}
+		}
+
+		if (lower_or_arm_args != NIL)
+			lower_or_arms = lappend(lower_or_arms,
+									list_length(lower_or_arm_args) > 1
+									? makeBoolExpr(AND_EXPR, lower_or_arm_args, -1)
+									: linitial(lower_or_arm_args));
+
+		if (upper_or_arm_args != NIL)
+			upper_or_arms = lappend(upper_or_arms,
+									list_length(upper_or_arm_args) > 1
+									? makeBoolExpr(AND_EXPR, upper_or_arm_args, -1)
+									: linitial(upper_or_arm_args));
+
+		/* If no work to do in the next iteration, break away. */
+		if (!need_next_lower_arm && !need_next_upper_arm)
+			break;
+
+		++current_or_arm;
+	}
+
+	/*
+	 * Generate the OR expressions for each of lower and upper bounds (if
+	 * required), and append to the list of implicitly ANDed list of
+	 * expressions.
+	 */
+	if (lower_or_arms != NIL)
+		result = lappend(result,
+						 list_length(lower_or_arms) > 1
+						 ? makeBoolExpr(OR_EXPR, lower_or_arms, -1)
+						 : linitial(lower_or_arms));
+	if (upper_or_arms != NIL)
+		result = lappend(result,
+						 list_length(upper_or_arms) > 1
+						 ? makeBoolExpr(OR_EXPR, upper_or_arms, -1)
+						 : linitial(upper_or_arms));
+
+	/*
+	 * As noted above, for non-default, we return list with constant TRUE. If
+	 * the result is NIL during the recursive call for default, it implies
+	 * this is the only other partition which can hold every value of the key
+	 * except NULL. Hence we return the NullTest result skipped earlier.
+	 */
+	if (result == NIL)
+		result = for_default
+			? get_range_nulltest(key)
+			: list_make1(makeBoolConst(true, false));
+
+	return result;
+}
 #endif
 
 /*
@@ -1976,3 +2935,6 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	return (Datum) 0;
 #endif
 }
+
+
+
