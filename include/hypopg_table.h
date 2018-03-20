@@ -21,6 +21,7 @@
 #define HYPO_TABLE_NB_COLS		5	/* # of column hypopg_table() returns */
 #define HYPO_ADD_PART_COLS	2	/* # of column hypopg_add_partition() returns */
 
+#include "optimizer/paths.h"
 
 /*--- Structs --- */
 
@@ -65,5 +66,12 @@ Datum		hypopg_add_partition(PG_FUNCTION_ARGS);
 Datum		hypopg_drop_table(PG_FUNCTION_ARGS);
 Datum		hypopg_partition_table(PG_FUNCTION_ARGS);
 Datum		hypopg_reset_table(PG_FUNCTION_ARGS);
+
+bool hypo_table_oid_is_hypothetical(Oid relid);
+void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
+					 Oid relationObjectId,
+					 RelOptInfo *rel);
+void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
+			      Index rti, RangeTblEntry *rte);
 
 #endif

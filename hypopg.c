@@ -20,8 +20,12 @@
 #include "include/hypopg.h"
 #include "include/hypopg_import.h"
 #include "include/hypopg_index.h"
+#include "include/hypopg_table.h"
 
 PG_MODULE_MAGIC;
+
+/*--- Macros ---*/
+#define HYPO_ENABLED() (isExplain && hypo_is_enabled)
 
 /*--- Variables exported ---*/
 
@@ -70,6 +74,12 @@ static void hypo_get_relation_info_hook(PlannerInfo *root,
 							RelOptInfo *rel);
 static get_relation_info_hook_type prev_get_relation_info_hook = NULL;
 
+static void hypo_set_rel_pathlist_hook(PlannerInfo *root,
+									   RelOptInfo *rel,
+									   Index rti,
+									   RangeTblEntry *rte);
+static set_rel_pathlist_hook_type prev_set_rel_pathlist_hook = NULL;
+
 static bool hypo_query_walker(Node *node);
 
 void
@@ -87,6 +97,9 @@ _PG_init(void)
 
 	prev_explain_get_index_name_hook = explain_get_index_name_hook;
 	explain_get_index_name_hook = hypo_explain_get_index_name_hook;
+
+	prev_set_rel_pathlist_hook = set_rel_pathlist_hook;
+	set_rel_pathlist_hook = hypo_set_rel_pathlist_hook;
 
 	isExplain = false;
 	hypoIndexes = NIL;
@@ -123,7 +136,7 @@ _PG_fini(void)
 	ExecutorEnd_hook = prev_ExecutorEnd_hook;
 	get_relation_info_hook = prev_get_relation_info_hook;
 	explain_get_index_name_hook = prev_explain_get_index_name_hook;
-
+	set_rel_pathlist_hook = prev_set_rel_pathlist_hook;
 }
 
 /*---------------------------------
@@ -186,12 +199,12 @@ hypo_utility_hook(
 {
 	isExplain = query_or_expression_tree_walker(
 #if PG_VERSION_NUM >= 100000
-												(Node *) pstmt,
+						    (Node *) pstmt,
 #else
-												parsetree,
+						    parsetree,
 #endif
-												hypo_query_walker,
-												NULL, 0);
+						    hypo_query_walker,
+						    NULL, 0);
 
 	if (prev_utility_hook)
 		prev_utility_hook(
@@ -288,11 +301,11 @@ hypo_executorEnd_hook(QueryDesc *queryDesc)
  */
 static void
 hypo_get_relation_info_hook(PlannerInfo *root,
-							Oid relationObjectId,
-							bool inhparent,
-							RelOptInfo *rel)
+			    Oid relationObjectId,
+			    bool inhparent,
+			    RelOptInfo *rel)
 {
-	if (isExplain && hypo_is_enabled)
+  if (HYPO_ENABLED())
 	{
 		Relation	relation;
 
@@ -317,19 +330,43 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 					 * hypothetical index found, add it to the relation's
 					 * indextlist
 					 */
-					hypo_injectHypotheticalIndex(root, relationObjectId,
-											inhparent, rel, relation, entry);
+				  hypo_injectHypotheticalIndex(root, relationObjectId,
+							       inhparent, rel, relation, entry);
 				}
 			}
 		}
 
 		/* Close the relation release the lock now */
 		heap_close(relation, AccessShareLock);
-	}
 
+		if(hypo_table_oid_is_hypothetical(relationObjectId))
+		  /*
+		   * this relation is table we want to partition hypothetical, 
+		   * inject hypothetical partitioning 
+		   */
+		  hypo_injectHypotheticalPartitioning(root, relationObjectId, rel);
+
+	}
 	if (prev_get_relation_info_hook)
 		prev_get_relation_info_hook(root, relationObjectId, inhparent, rel);
 }
+
+/*
+ * if this child relation is excluded by constraints, call set_dummy_rel_pathlist
+ */
+static void 
+hypo_set_rel_pathlist_hook(PlannerInfo *root,
+									   RelOptInfo *rel,
+									   Index rti,
+									   RangeTblEntry *rte)
+{
+  if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid) && rte->relkind == 'r')
+    hypo_markDummyIfExcluded(root,rel,rti,rte);
+		
+  if (prev_set_rel_pathlist_hook)
+    prev_set_rel_pathlist_hook(root, rel, rti, rte);	
+}
+
 
 /*
  * Reset statistics.
