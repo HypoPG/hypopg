@@ -18,6 +18,7 @@
 #endif
 #if PG_VERSION_NUM >= 100000
 #include "access/sysattr.h"
+#include "access/stratnum.h"
 #endif
 #include "catalog/heap.h"
 #include "catalog/namespace.h"
@@ -34,7 +35,7 @@
 #include "catalog/pg_type.h"
 #include "nodes/nodeFuncs.h"
 #include "utils/ruleutils.h"
-\#endif
+#endif
 #include "optimizer/clauses.h"
 #include "optimizer/planner.h"
 #include "optimizer/var.h"
@@ -1196,7 +1197,7 @@ validateInfiniteBounds(ParseState *pstate, List *blist)
  * Return oid of the operator of given strategy for a given partition key
  * column.
  */
-static Oid
+Oid
 get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
 					   bool *need_relabel)
 {
@@ -1249,7 +1250,7 @@ get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
  *		Returns an Expr for the given partition key column with arg1 and
  *		arg2 as its leftop and rightop, respectively
  */
-static Expr *
+Expr *
 make_partition_op_expr(PartitionKey key, int keynum,
 		       uint16 strategy, Expr *arg1, Expr *arg2)
 {
@@ -1370,7 +1371,7 @@ make_partition_op_expr(PartitionKey key, int keynum,
  * *partexprs_item points to the cell containing the next expression in
  * the key->partexprs list, or NULL.  It may be advanced upon return.
  */
-static void
+void
 get_range_key_properties(PartitionKey key, int keynum,
 			 PartitionRangeDatum *ldatum,
 			 PartitionRangeDatum *udatum,
@@ -1417,7 +1418,7 @@ get_range_key_properties(PartitionKey key, int keynum,
   * A non-default range partition table does not currently allow partition
   * keys to be null, so emit an IS NOT NULL expression for each key column.
   */
-static List *
+List *
 get_range_nulltest(PartitionKey key)
 {
   List	   *result = NIL;
@@ -1468,7 +1469,7 @@ get_range_nulltest(PartitionKey key)
  *
  * For paranoia's sake, we match type/collation as well as attribute name.
  */
-static void
+void
 make_inh_translation_list(Relation oldrelation, Relation newrelation,
 						  Index newvarno,
 						  List **translated_vars)
