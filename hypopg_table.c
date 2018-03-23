@@ -17,7 +17,6 @@
 
 #include "postgres.h"
 #include "fmgr.h"
-//#include "port.h"
 
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -44,6 +43,7 @@
 #include "tcop/utility.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
@@ -102,7 +102,6 @@ static List *hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec)
 static List *hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, 
 									 bool for_default);
 
-#define F_SATISFIES_HASH_PARTITION 5028 
 #define rtiIsHandled(rti, root) (planner_rt_fetch(rti, root)->security_barrier)
 #define handleRti(rti, root) (planner_rt_fetch(rti, root)->security_barrier = true)
 
