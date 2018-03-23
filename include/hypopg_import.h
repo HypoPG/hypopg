@@ -118,5 +118,23 @@ void simple_quote_literal(StringInfo buf, const char *val);
 Const *transformPartitionBoundValue(ParseState *pstate, A_Const *con,
 		const char *colName, Oid colType, int32 colTypmod);
 void validateInfiniteBounds(ParseState *pstate, List *blist);
+Oid get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
+			   bool *need_relabel);
+Expr *make_partition_op_expr(PartitionKey key, int keynum,
+			     uint16 strategy, Expr *arg1, Expr *arg2);
+void get_range_key_properties(PartitionKey key, int keynum,
+			      PartitionRangeDatum *ldatum,
+			      PartitionRangeDatum *udatum,
+			      ListCell **partexprs_item,
+			      Expr **keyCol,
+			      Const **lower_val, Const **upper_val);
+List *get_range_nulltest(PartitionKey key);
+void make_inh_translation_list(Relation oldrelation, Relation newrelation,
+			       Index newvarno,
+			       List **translated_vars);
+
+/* Copied from src/backend/catalog/partition.c, not exported */
+#define partition_bound_accepts_nulls(bi) ((bi)->null_index != -1)
+
 #endif
 #endif
