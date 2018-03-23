@@ -24,6 +24,8 @@
 
 PG_MODULE_MAGIC;
 
+/*--- Macros ---*/
+#define HYPO_ENABLED() (isExplain && hypo_is_enabled)
 
 /*--- Variables exported ---*/
 
@@ -299,11 +301,11 @@ hypo_executorEnd_hook(QueryDesc *queryDesc)
  */
 static void
 hypo_get_relation_info_hook(PlannerInfo *root,
-							Oid relationObjectId,
-							bool inhparent,
-							RelOptInfo *rel)
+			    Oid relationObjectId,
+			    bool inhparent,
+			    RelOptInfo *rel)
 {
-	if (isExplain && hypo_is_enabled)
+  if (HYPO_ENABLED())
 	{
 		Relation	relation;
 
@@ -336,12 +338,15 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 
 		/* Close the relation release the lock now */
 		heap_close(relation, AccessShareLock);
+
+		if(hypo_table_oid_is_hypothetical(relationObjectId))
+		  /*
+		   * this relation is table we want to partition hypothetical, 
+		   * inject hypothetical partitioning 
+		   */
+		  hypo_injectHypotheticalPartitioning(root, relationObjectId, rel);
+
 	}
-
-
-	hypo_createHypotheticalTable(root, relationObjectId, rel);
-  
-
 	if (prev_get_relation_info_hook)
 		prev_get_relation_info_hook(root, relationObjectId, inhparent, rel);
 }
@@ -355,15 +360,11 @@ hypo_set_rel_pathlist_hook(PlannerInfo *root,
 									   Index rti,
 									   RangeTblEntry *rte)
 {
-	if(isExplain && hypo_is_enabled)
-	{	
+  if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid) && rte->relkind == 'r')
+    hypo_markDummyIfExcluded(root,rel,rti,rte);
 		
-		hypo_setHypotheticalDummyrel(root,rel,rti,rte);
-		
-	}
-	
-	if (prev_set_rel_pathlist_hook)
-		prev_set_rel_pathlist_hook(root, rel, rti, rte);	
+  if (prev_set_rel_pathlist_hook)
+    prev_set_rel_pathlist_hook(root, rel, rti, rte);	
 }
 
 

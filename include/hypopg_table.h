@@ -67,10 +67,11 @@ Datum		hypopg_drop_table(PG_FUNCTION_ARGS);
 Datum		hypopg_partition_table(PG_FUNCTION_ARGS);
 Datum		hypopg_reset_table(PG_FUNCTION_ARGS);
 
-void hypo_createHypotheticalTable(PlannerInfo *root,
-								  Oid relationObjectId,
-								  RelOptInfo *rel);
-void hypo_setHypotheticalDummyrel(PlannerInfo *root, RelOptInfo *rel,
-								  Index rti, RangeTblEntry *rte);
+bool hypo_table_oid_is_hypothetical(Oid relid);
+void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
+					 Oid relationObjectId,
+					 RelOptInfo *rel);
+void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
+			      Index rti, RangeTblEntry *rte);
 
 #endif
