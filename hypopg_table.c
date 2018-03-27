@@ -1848,44 +1848,44 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		pcinfo->parent_relid = oldsize;
 		pcinfo->child_rels = partitioned_child_rels;
 		root->pcinfo_list = lappend(root->pcinfo_list, pcinfo);
-
+		
 		/* add partition info to this rel */
 		hypo_partition_table(root, rel, parent);
 	}
-
-
-	/*
+	
+	/* 
 	 * if this rel is partition, rewrite tuples and pages using selectivity
 	 * which is computed according to its partition constraints
 	 */
 	if (rel->reloptkind != RELOPT_BASEREL
-			&&HYPO_RTI_IS_TAGGED(rel->relid,root))
-	{
+		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
+    {
 		List *constraints;
 		PlannerInfo *root_dummy;
 		Selectivity selectivity;
+		double pages;
 
 		/* get its partition constraints */
 		constraints = hypo_get_partition_constraints(root, rel, parent);
-
-		/*
+      
+		/* 
 		 * to compute selectivity, make dummy PlannerInfo and then rewrite
 		 * tuples and pages using this selectivity
 		 */
 		root_dummy = makeNode(PlannerInfo);
 		root_dummy = root;
 		root_dummy->simple_rel_array[rel->relid] = rel;
-
-		selectivity = clauselist_selectivity(root_dummy,
-				constraints,
-				0,
-				JOIN_INNER,
-				NULL);
-
-		rel->pages = rint(rel->pages * selectivity);
+      
+		selectivity = clauselist_selectivity(root_dummy, 
+											 constraints,
+											 0,
+											 JOIN_INNER,
+											 NULL);
+      
+		pages = ceil(rel->pages * selectivity);
+		rel->pages = (BlockNumber)pages;
 		rel->tuples = clamp_row_est(rel->tuples * selectivity);
-
-	}
+    }
 }
 
 
