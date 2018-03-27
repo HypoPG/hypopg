@@ -1864,7 +1864,8 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
       List *constraints;
       PlannerInfo *root_dummy;
       Selectivity selectivity;
-      
+      double pages;
+
       /* get its partition constraints */
       constraints = hypo_get_partition_constraints(root, rel, parent);
       
@@ -1882,9 +1883,9 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 					   JOIN_INNER,
 					   NULL);
       
-      rel->pages = rint(rel->pages * selectivity);
+      pages = ceil(rel->pages * selectivity);
+      rel->pages = (BlockNumber)pages;
       rel->tuples = clamp_row_est(rel->tuples * selectivity);
-      
     }
 }
 
