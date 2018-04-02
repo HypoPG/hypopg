@@ -14,6 +14,7 @@
 
 #include "nodes/pg_list.h"
 #include "optimizer/planner.h"
+#include "optimizer/pathnode.h"
 #include "utils/rel.h"
 
 
@@ -132,7 +133,8 @@ List *get_range_nulltest(PartitionKey key);
 void make_inh_translation_list(Relation oldrelation, Relation newrelation,
 			       Index newvarno,
 			       List **translated_vars);
-
+void set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte);
+void create_plain_partial_paths(PlannerInfo *root, RelOptInfo *rel);
 /* Copied from src/backend/catalog/partition.c, not exported */
 #define partition_bound_accepts_nulls(bi) ((bi)->null_index != -1)
 

@@ -356,16 +356,16 @@ hypo_get_relation_info_hook(PlannerInfo *root,
  */
 static void
 hypo_set_rel_pathlist_hook(PlannerInfo *root,
-									   RelOptInfo *rel,
-									   Index rti,
-									   RangeTblEntry *rte)
+						   RelOptInfo *rel,
+						   Index rti,
+						   RangeTblEntry *rte)
 {
-	if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid) &&
-			rte->relkind == 'r')
-		hypo_markDummyIfExcluded(root,rel,rti,rte);
-
+	if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid) && rte->relkind == 'r')
+		// hypo_markDummyIfExcluded(root,rel,rti,rte);
+		hypo_setPartitionPathlist(root,rel,rti,rte);
+	
 	if (prev_set_rel_pathlist_hook)
-		prev_set_rel_pathlist_hook(root, rel, rti, rte);
+		prev_set_rel_pathlist_hook(root, rel, rti, rte);	
 }
 
 

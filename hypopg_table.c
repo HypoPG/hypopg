@@ -35,8 +35,11 @@
 #include "nodes/nodes.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
+#include "optimizer/pathnode.h"
 #include "optimizer/predtest.h"
 #include "optimizer/prep.h"
+#include "optimizer/restrictinfo.h"
+#include "optimizer/var.h"
 #include "parser/parsetree.h"
 #include "parser/parse_utilcmd.h"
 #include "rewrite/rewriteManip.h"
@@ -1852,39 +1855,34 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		/* add partition info to this rel */
 		hypo_partition_table(root, rel, parent);
 	}
-	
+  
 	/* 
-	 * if this rel is partition, rewrite tuples and pages using selectivity
-	 * which is computed according to its partition constraints
+	 * If this rel is partition, we add the partition constraints to the
+	 * rte->securityQuals so that the relation which is need not be scanned 
+	 * is marked as Dummy at the set_append_rel_size() and the rel->rows is 
+	 * computed correctly at the set_baserel_size_estimates(). We shouldn't 
+	 * rewrite the rel->pages and the rel->tuples here, because they will be 
+	 * rewritten at the later hook.
+	 *
+	 * TODO: should comfirm that the tuples will not referred till the 
+	 * set_baserel_size_esimates() and think about rel->reltarget->width
+	 *
 	 */
 	if (rel->reloptkind != RELOPT_BASEREL
 		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
     {
 		List *constraints;
-		PlannerInfo *root_dummy;
-		Selectivity selectivity;
-		double pages;
-
+		
 		/* get its partition constraints */
 		constraints = hypo_get_partition_constraints(root, rel, parent);
       
-		/* 
-		 * to compute selectivity, make dummy PlannerInfo and then rewrite
-		 * tuples and pages using this selectivity
+		/*
+		 * to compute rel->rows at set_baserel_size_estimates using parent's 
+		 * statistics, parent's tuples and baserestrictinfo, we add the partition
+		 * constraints to its rte->securityQuals
 		 */
-		root_dummy = makeNode(PlannerInfo);
-		root_dummy = root;
-		root_dummy->simple_rel_array[rel->relid] = rel;
-      
-		selectivity = clauselist_selectivity(root_dummy, 
-											 constraints,
-											 0,
-											 JOIN_INNER,
-											 NULL);
-      
-		pages = ceil(rel->pages * selectivity);
-		rel->pages = (BlockNumber)pages;
-		rel->tuples = clamp_row_est(rel->tuples * selectivity);
+		planner_rt_fetch(rel->relid, root)->securityQuals = list_make1(constraints);
+
     }
 }
 
@@ -1934,11 +1932,125 @@ void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
 
 
 	/*
-TODO: re-estimate parent size just like set_append_rel_size()
-*/
-
-
+	  TODO: re-estimate parent size just like set_append_rel_size()
+	*/
+	
 }
+
+
+
+/*
+ * If this rel is partition, we remove the partition constraints from the
+ * its rel->baserestrictinfo and rewrite some items of its RelOptInfo: 
+ * the rel->pages, the rel->tuples rel->baserestrictcost. After that 
+ * we call the set_plain_rel_pathlist() to re-create its pathlist using
+ * the new RelOptInfo.
+ *
+ */
+
+void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel, 
+							   Index rti, RangeTblEntry *rte)
+{
+	ListCell *l;
+	Index parentRTindex;
+	RelOptInfo *parentrel;
+	hypoTable *parent = hypo_find_table(rte->relid);
+	List *constraints = hypo_get_partition_constraints(root, rel, parent);
+	PlannerInfo *root_dummy;
+	Selectivity selectivity;
+	double pages;  
+
+	/* 
+	 * get the parent's rel and copy its rel->baserestrictinfo to 
+	 * the own rel->baserestrictinfo.
+	 * this part is inspired on set_append_rel_size().  
+	 */
+	foreach(l, root->append_rel_list) 
+	{
+		AppendRelInfo *appinfo = (AppendRelInfo *)lfirst(l);
+		List *childquals = NIL;
+		Index cq_min_security = UINT_MAX;
+		ListCell *lc;        
+
+		if(appinfo->child_relid == rti)
+		{
+			parentRTindex = appinfo->parent_relid;
+			parentrel = root->simple_rel_array[parentRTindex];
+
+			foreach(lc, parentrel->baserestrictinfo)
+			{
+				RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+				Node	   *childqual;
+				ListCell   *lc2;
+	      
+				Assert(IsA(rinfo, RestrictInfo));
+				childqual = adjust_appendrel_attrs(root,
+												   (Node *) rinfo->clause,
+												   1, &appinfo);
+				childqual = eval_const_expressions(root, childqual);
+	      
+				/* might have gotten an AND clause, if so flatten it */
+				foreach(lc2, make_ands_implicit((Expr *) childqual))
+				{
+					Node	   *onecq = (Node *) lfirst(lc2);
+					bool		pseudoconstant;
+		  
+					/* check for pseudoconstant (no Vars or volatile functions) */
+					pseudoconstant =
+						!contain_vars_of_level(onecq, 0) &&
+						!contain_volatile_functions(onecq);
+					if (pseudoconstant)
+					{
+						/* tell createplan.c to check for gating quals */
+						root->hasPseudoConstantQuals = true;
+					}
+					/* reconstitute RestrictInfo with appropriate properties */
+					childquals = lappend(childquals,
+										 make_restrictinfo((Expr *) onecq,
+														   rinfo->is_pushed_down,
+														   rinfo->outerjoin_delayed,
+														   pseudoconstant,
+														   rinfo->security_level,
+														   NULL, NULL, NULL));
+					/* track minimum security level among child quals */
+					cq_min_security = Min(cq_min_security, rinfo->security_level);
+				}
+			}
+			rel->baserestrictinfo = childquals;
+			rel->baserestrict_min_security = cq_min_security;
+			break;	
+		}
+    }
+	
+	/* 
+	 * make dummy PlannerInfo to compute the selectivity, and then rewrite
+	 * tuples and pages using this selectivity
+	 */
+	root_dummy = makeNode(PlannerInfo);
+	root_dummy = root;
+	root_dummy->simple_rel_array[rti] = rel;
+	
+	selectivity = clauselist_selectivity(root_dummy, 
+										 constraints,
+										 0,
+										 JOIN_INNER,
+										 NULL);
+  
+	pages = ceil(rel->pages * selectivity);
+	rel->pages = (BlockNumber)pages;
+	rel->tuples = clamp_row_est(rel->tuples * selectivity);
+
+	/* recompute the rel->baserestrictcost*/
+	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
+  
+	/* 
+	 * call the set_plain_rel_pathlist() to re-create its pathlist using 
+	 * the new RelOptInfo 
+	 */
+	set_plain_rel_pathlist(root, rel, rte);
+}
+  
+
 
 
 /*
