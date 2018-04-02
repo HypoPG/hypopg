@@ -305,7 +305,7 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 			    bool inhparent,
 			    RelOptInfo *rel)
 {
-  if (HYPO_ENABLED())
+	if (HYPO_ENABLED())
 	{
 		Relation	relation;
 
@@ -341,8 +341,8 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 
 		if(hypo_table_oid_is_hypothetical(relationObjectId))
 		  /*
-		   * this relation is table we want to partition hypothetical, 
-		   * inject hypothetical partitioning 
+		   * this relation is table we want to partition hypothetical,
+		   * inject hypothetical partitioning
 		   */
 		  hypo_injectHypotheticalPartitioning(root, relationObjectId, rel);
 
@@ -354,17 +354,18 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 /*
  * if this child relation is excluded by constraints, call set_dummy_rel_pathlist
  */
-static void 
+static void
 hypo_set_rel_pathlist_hook(PlannerInfo *root,
-									   RelOptInfo *rel,
-									   Index rti,
-									   RangeTblEntry *rte)
+						   RelOptInfo *rel,
+						   Index rti,
+						   RangeTblEntry *rte)
 {
-  if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid) && rte->relkind == 'r')
-    hypo_markDummyIfExcluded(root,rel,rti,rte);
-		
-  if (prev_set_rel_pathlist_hook)
-    prev_set_rel_pathlist_hook(root, rel, rti, rte);	
+	if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid)
+	   && rte->relkind == 'r')
+		hypo_setPartitionPathlist(root,rel,rti,rte);
+
+	if (prev_set_rel_pathlist_hook)
+		prev_set_rel_pathlist_hook(root, rel, rti, rte);
 }
 
 

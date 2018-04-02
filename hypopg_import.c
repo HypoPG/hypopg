@@ -37,6 +37,14 @@
 #include "utils/ruleutils.h"
 #endif
 #include "optimizer/clauses.h"
+#if PG_VERSION_NUM >= 110000
+#include "catalog/partition.h"
+#include "optimizer/cost.h"
+#include "optimizer/paths.h"
+#include "partitioning/partbounds.h"
+#include "utils/partcache.h"
+#include "partitioning/partdefs.h"
+#endif
 #include "optimizer/planner.h"
 #include "optimizer/var.h"
 #include "parser/parse_coerce.h"
@@ -49,9 +57,8 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
+
 #include "include/hypopg_import.h"
-
-
 
 
 
@@ -819,6 +826,7 @@ make_one_range_bound(PartitionKey key, int index, List *datums, bool lower)
 
 	return bound;
 }
+
 /*
  * Copied from src/backend/catalog/partition.c, not exported
  *
@@ -831,74 +839,9 @@ qsort_partition_rbound_cmp(const void *a, const void *b, void *arg)
 	PartitionRangeBound *b2 = (*(PartitionRangeBound *const *) b);
 	PartitionKey key = (PartitionKey) arg;
 
-	return partition_rbound_cmp(key, b1->datums, b1->kind, b1->lower, b2);
-}
-
-/*
- * Copied from src/backend/catalog/partition.c, not exported
- *
- * partition_rbound_cmp
- *
- * Return for two range bounds whether the 1st one (specified in datums1,
- * kind1, and lower1) is <, =, or > the bound specified in *b2.
- *
- * Note that if the values of the two range bounds compare equal, then we take
- * into account whether they are upper or lower bounds, and an upper bound is
- * considered to be smaller than a lower bound. This is important to the way
- * that RelationBuildPartitionDesc() builds the PartitionBoundInfoData
- * structure, which only stores the upper bound of a common boundary between
- * two contiguous partitions.
- */
-int32
-partition_rbound_cmp(PartitionKey key,
-					 Datum *datums1, PartitionRangeDatumKind *kind1,
-					 bool lower1, PartitionRangeBound *b2)
-{
-	int32		cmpval = 0;		/* placate compiler */
-	int			i;
-	Datum	   *datums2 = b2->datums;
-	PartitionRangeDatumKind *kind2 = b2->kind;
-	bool		lower2 = b2->lower;
-
-	for (i = 0; i < key->partnatts; i++)
-	{
-		/*
-		 * First, handle cases where the column is unbounded, which should not
-		 * invoke the comparison procedure, and should not consider any later
-		 * columns. Note that the PartitionRangeDatumKind enum elements
-		 * compare the same way as the values they represent.
-		 */
-		if (kind1[i] < kind2[i])
-			return -1;
-		else if (kind1[i] > kind2[i])
-			return 1;
-		else if (kind1[i] != PARTITION_RANGE_DATUM_VALUE)
-
-			/*
-			 * The column bounds are both MINVALUE or both MAXVALUE. No later
-			 * columns should be considered, but we still need to compare
-			 * whether they are upper or lower bounds.
-			 */
-			break;
-
-		cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[i],
-												 key->partcollation[i],
-												 datums1[i],
-												 datums2[i]));
-		if (cmpval != 0)
-			break;
-	}
-
-	/*
-	 * If the comparison is anything other than equal, we're done. If they
-	 * compare equal though, we still have to consider whether the boundaries
-	 * are inclusive or exclusive.  Exclusive one is considered smaller of the
-	 * two.
-	 */
-	if (cmpval == 0 && lower1 != lower2)
-		cmpval = lower1 ? 1 : -1;
-
-	return cmpval;
+	return partition_rbound_cmp(key->partnatts, key->partsupfunc,
+								key->partcollation, b1->datums, b1->kind,
+								b1->lower, b2);
 }
 
 /* ----------
@@ -1254,104 +1197,104 @@ Expr *
 make_partition_op_expr(PartitionKey key, int keynum,
 		       uint16 strategy, Expr *arg1, Expr *arg2)
 {
-  Oid			operoid;
-  bool		need_relabel = false;
-  Expr	   *result = NULL;
-  
-  /* Get the correct btree operator for this partitioning column */
-  operoid = get_partition_operator(key, keynum, strategy, &need_relabel);
-  
-  /*
-   * Chosen operator may be such that the non-Const operand needs to be
-   * coerced, so apply the same; see the comment in
-   * get_partition_operator().
-   */
-  if (!IsA(arg1, Const) &&
-      (need_relabel ||
-       key->partcollation[keynum] != key->parttypcoll[keynum]))
-    arg1 = (Expr *) makeRelabelType(arg1,
-				    key->partopcintype[keynum],
-				    -1,
-				    key->partcollation[keynum],
-				    COERCE_EXPLICIT_CAST);
+	Oid			operoid;
+	bool		need_relabel = false;
+	Expr	   *result = NULL;
 
-  /* Generate the actual expression */
-  switch (key->strategy)
-    {
-    case PARTITION_STRATEGY_LIST:
-      {
-	List	   *elems = (List *) arg2;
-	int			nelems = list_length(elems);
-	
-	Assert(nelems >= 1);
-	Assert(keynum == 0);
-	
-	if (nelems > 1 &&
-	    !type_is_array(key->parttypid[keynum]))
-	  {
-	    ArrayExpr  *arrexpr;
-	    ScalarArrayOpExpr *saopexpr;
-	    
-	    /* Construct an ArrayExpr for the right-hand inputs */
-	    arrexpr = makeNode(ArrayExpr);
-	    arrexpr->array_typeid =
-	      get_array_type(key->parttypid[keynum]);
-	    arrexpr->array_collid = key->parttypcoll[keynum];
-	    arrexpr->element_typeid = key->parttypid[keynum];
-	    arrexpr->elements = elems;
-	    arrexpr->multidims = false;
-	    arrexpr->location = -1;
-	    
-	    /* Build leftop = ANY (rightop) */
-	    saopexpr = makeNode(ScalarArrayOpExpr);
-	    saopexpr->opno = operoid;
-	    saopexpr->opfuncid = get_opcode(operoid);
-	    saopexpr->useOr = true;
-	    saopexpr->inputcollid = key->partcollation[keynum];
-	    saopexpr->args = list_make2(arg1, arrexpr);
-	    saopexpr->location = -1;
-	    
-	    result = (Expr *) saopexpr;
-	  }
-	else
-	  {
-	    List	   *elemops = NIL;
-	    ListCell   *lc;
-	    
-	    foreach (lc, elems)
-	      {
-		Expr   *elem = lfirst(lc),
-		  *elemop;
-		
-		elemop = make_opclause(operoid,
-				       BOOLOID,
-				       false,
-				       arg1, elem,
-				       InvalidOid,
-				       key->partcollation[keynum]);
-		elemops = lappend(elemops, elemop);
-	      }
-	    
-	    result = nelems > 1 ? makeBoolExpr(OR_EXPR, elemops, -1) : linitial(elemops);
-	  }
-	break;
-      }
-      
-    case PARTITION_STRATEGY_RANGE:
-      result = make_opclause(operoid,
-			     BOOLOID,
-			     false,
-			     arg1, arg2,
-			     InvalidOid,
-			     key->partcollation[keynum]);
-      break;
-      
-    default:
-      elog(ERROR, "invalid partitioning strategy");
-      break;
-    }
-  
-  return result;
+	/* Get the correct btree operator for this partitioning column */
+	operoid = get_partition_operator(key, keynum, strategy, &need_relabel);
+
+	/*
+	 * Chosen operator may be such that the non-Const operand needs to be
+	 * coerced, so apply the same; see the comment in
+	 * get_partition_operator().
+	 */
+	if (!IsA(arg1, Const) &&
+			(need_relabel ||
+			 key->partcollation[keynum] != key->parttypcoll[keynum]))
+		arg1 = (Expr *) makeRelabelType(arg1,
+				key->partopcintype[keynum],
+				-1,
+				key->partcollation[keynum],
+				COERCE_EXPLICIT_CAST);
+
+	/* Generate the actual expression */
+	switch (key->strategy)
+	{
+		case PARTITION_STRATEGY_LIST:
+			{
+				List	   *elems = (List *) arg2;
+				int			nelems = list_length(elems);
+
+				Assert(nelems >= 1);
+				Assert(keynum == 0);
+
+				if (nelems > 1 &&
+						!type_is_array(key->parttypid[keynum]))
+				{
+					ArrayExpr  *arrexpr;
+					ScalarArrayOpExpr *saopexpr;
+
+					/* Construct an ArrayExpr for the right-hand inputs */
+					arrexpr = makeNode(ArrayExpr);
+					arrexpr->array_typeid =
+						get_array_type(key->parttypid[keynum]);
+					arrexpr->array_collid = key->parttypcoll[keynum];
+					arrexpr->element_typeid = key->parttypid[keynum];
+					arrexpr->elements = elems;
+					arrexpr->multidims = false;
+					arrexpr->location = -1;
+
+					/* Build leftop = ANY (rightop) */
+					saopexpr = makeNode(ScalarArrayOpExpr);
+					saopexpr->opno = operoid;
+					saopexpr->opfuncid = get_opcode(operoid);
+					saopexpr->useOr = true;
+					saopexpr->inputcollid = key->partcollation[keynum];
+					saopexpr->args = list_make2(arg1, arrexpr);
+					saopexpr->location = -1;
+
+					result = (Expr *) saopexpr;
+				}
+				else
+				{
+					List	   *elemops = NIL;
+					ListCell   *lc;
+
+					foreach (lc, elems)
+					{
+						Expr   *elem = lfirst(lc),
+							   *elemop;
+
+						elemop = make_opclause(operoid,
+								BOOLOID,
+								false,
+								arg1, elem,
+								InvalidOid,
+								key->partcollation[keynum]);
+						elemops = lappend(elemops, elemop);
+					}
+
+					result = nelems > 1 ? makeBoolExpr(OR_EXPR, elemops, -1) : linitial(elemops);
+				}
+				break;
+			}
+
+		case PARTITION_STRATEGY_RANGE:
+			result = make_opclause(operoid,
+					BOOLOID,
+					false,
+					arg1, arg2,
+					InvalidOid,
+					key->partcollation[keynum]);
+			break;
+
+		default:
+			elog(ERROR, "invalid partitioning strategy");
+			break;
+	}
+
+	return result;
 }
 
 /*
@@ -1379,84 +1322,84 @@ get_range_key_properties(PartitionKey key, int keynum,
 			 Expr **keyCol,
 			 Const **lower_val, Const **upper_val)
 {
-  /* Get partition key expression for this column */
-  if (key->partattrs[keynum] != 0)
-    {
-      *keyCol = (Expr *) makeVar(1,
-				 key->partattrs[keynum],
-				 key->parttypid[keynum],
-				 key->parttypmod[keynum],
-				 key->parttypcoll[keynum],
-				 0);
-    }
-  else
-    {
-      if (*partexprs_item == NULL)
-	elog(ERROR, "wrong number of partition key expressions");
-      *keyCol = copyObject(lfirst(*partexprs_item));
-      *partexprs_item = lnext(*partexprs_item);
-    }
+	/* Get partition key expression for this column */
+	if (key->partattrs[keynum] != 0)
+	{
+		*keyCol = (Expr *) makeVar(1,
+				key->partattrs[keynum],
+				key->parttypid[keynum],
+				key->parttypmod[keynum],
+				key->parttypcoll[keynum],
+				0);
+	}
+	else
+	{
+		if (*partexprs_item == NULL)
+			elog(ERROR, "wrong number of partition key expressions");
+		*keyCol = copyObject(lfirst(*partexprs_item));
+		*partexprs_item = lnext(*partexprs_item);
+	}
 
-  /* Get appropriate Const nodes for the bounds */
-  if (ldatum->kind == PARTITION_RANGE_DATUM_VALUE)
-    *lower_val = castNode(Const, copyObject(ldatum->value));
-  else
-    *lower_val = NULL;
+	/* Get appropriate Const nodes for the bounds */
+	if (ldatum->kind == PARTITION_RANGE_DATUM_VALUE)
+		*lower_val = castNode(Const, copyObject(ldatum->value));
+	else
+		*lower_val = NULL;
 
-  if (udatum->kind == PARTITION_RANGE_DATUM_VALUE)
-    *upper_val = castNode(Const, copyObject(udatum->value));
-  else
-    *upper_val = NULL;
+	if (udatum->kind == PARTITION_RANGE_DATUM_VALUE)
+		*upper_val = castNode(Const, copyObject(udatum->value));
+	else
+		*upper_val = NULL;
 }
 
 
- /*
-  * Copied from src/backend/catalog/partition.c, not exported
-  *
-  * get_range_nulltest
-  *
-  * A non-default range partition table does not currently allow partition
-  * keys to be null, so emit an IS NOT NULL expression for each key column.
-  */
+/*
+ * Copied from src/backend/catalog/partition.c, not exported
+ *
+ * get_range_nulltest
+ *
+ * A non-default range partition table does not currently allow partition
+ * keys to be null, so emit an IS NOT NULL expression for each key column.
+ */
 List *
 get_range_nulltest(PartitionKey key)
 {
-  List	   *result = NIL;
-  NullTest   *nulltest;
-  ListCell   *partexprs_item;
-  int			i;
-  
-  partexprs_item = list_head(key->partexprs);
-  for (i = 0; i < key->partnatts; i++)
-    {
-      Expr	   *keyCol;
-      
-      if (key->partattrs[i] != 0)
+	List	   *result = NIL;
+	NullTest   *nulltest;
+	ListCell   *partexprs_item;
+	int			i;
+
+	partexprs_item = list_head(key->partexprs);
+	for (i = 0; i < key->partnatts; i++)
 	{
-	  keyCol = (Expr *) makeVar(1,
-				    key->partattrs[i],
-				    key->parttypid[i],
-				    key->parttypmod[i],
-				    key->parttypcoll[i],
-				    0);
-	}
-      else
-	{
-	  if (partexprs_item == NULL)
-	    elog(ERROR, "wrong number of partition key expressions");
-	  keyCol = copyObject(lfirst(partexprs_item));
-	  partexprs_item = lnext(partexprs_item);
+		Expr	   *keyCol;
+
+		if (key->partattrs[i] != 0)
+		{
+			keyCol = (Expr *) makeVar(1,
+					key->partattrs[i],
+					key->parttypid[i],
+					key->parttypmod[i],
+					key->parttypcoll[i],
+					0);
+		}
+		else
+		{
+			if (partexprs_item == NULL)
+				elog(ERROR, "wrong number of partition key expressions");
+			keyCol = copyObject(lfirst(partexprs_item));
+			partexprs_item = lnext(partexprs_item);
+		}
+
+		nulltest = makeNode(NullTest);
+		nulltest->arg = keyCol;
+		nulltest->nulltesttype = IS_NOT_NULL;
+		nulltest->argisrow = false;
+		nulltest->location = -1;
+		result = lappend(result, nulltest);
 	}
 
-      nulltest = makeNode(NullTest);
-      nulltest->arg = keyCol;
-      nulltest->nulltesttype = IS_NOT_NULL;
-      nulltest->argisrow = false;
-      nulltest->location = -1;
-      result = lappend(result, nulltest);
-    }
-  
-  return result;
+	return result;
 }
 
 
@@ -1564,5 +1507,61 @@ make_inh_translation_list(Relation oldrelation, Relation newrelation,
 
 	*translated_vars = vars;
 }
+
+
+/*
+ * Copied from src/backend/optimizer/path/allpaths.c, not exported
+ *
+ * set_plain_rel_pathlist
+ *	  Build access paths for a plain relation (no subquery, no inheritance)
+ */
+void
+set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+{
+	Relids		required_outer;
+
+	/*
+	 * We don't support pushing join clauses into the quals of a seqscan, but
+	 * it could still have required parameterization due to LATERAL refs in
+	 * its tlist.
+	 */
+	required_outer = rel->lateral_relids;
+
+	/* Consider sequential scan */
+	add_path(rel, create_seqscan_path(root, rel, required_outer, 0));
+
+	/* If appropriate, consider parallel sequential scan */
+	if (rel->consider_parallel && required_outer == NULL)
+		create_plain_partial_paths(root, rel);
+
+	/* Consider index scans */
+	create_index_paths(root, rel);
+
+	/* Consider TID scans */
+	create_tidscan_paths(root, rel);
+}
+
+/*
+ * Copied from src/backend/optimizer/path/allpaths.c, not exported
+ *
+ * create_plain_partial_paths
+ *	  Build partial access paths for parallel scan of a plain relation
+ */
+void
+create_plain_partial_paths(PlannerInfo *root, RelOptInfo *rel)
+{
+	int			parallel_workers;
+
+	parallel_workers = compute_parallel_worker(rel, rel->pages, -1,
+						   max_parallel_workers_per_gather);
+
+	/* If any limit was set to zero, the user doesn't want a parallel scan. */
+	if (parallel_workers <= 0)
+		return;
+
+	/* Add an unordered partial path based on a parallel sequential scan. */
+	add_partial_path(rel, create_seqscan_path(root, rel, NULL, parallel_workers));
+}
+
 
 #endif

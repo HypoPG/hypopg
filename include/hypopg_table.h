@@ -73,5 +73,7 @@ void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 					 RelOptInfo *rel);
 void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
 			      Index rti, RangeTblEntry *rte);
+void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
+			      Index rti, RangeTblEntry *rte);
 
 #endif
