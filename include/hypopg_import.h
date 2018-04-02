@@ -14,6 +14,8 @@
 
 #include "nodes/pg_list.h"
 #include "optimizer/planner.h"
+#include "optimizer/pathnode.h"
+#include "partitioning/partbounds.h"
 #include "utils/rel.h"
 
 
@@ -36,6 +38,7 @@ extern char *get_am_name(Oid amOid);
 extern void get_opclass_name(Oid opclass, Oid actual_datatype, StringInfo buf);
 
 #if PG_VERSION_NUM >= 100000
+#if PG_VERSION_NUM < 110000
 /*
  * Imported from src/backend/catalog/partition.c, not exported
  */
@@ -77,6 +80,7 @@ typedef struct PartitionRangeBound
 	PartitionRangeDatumKind *kind;	/* the kind of each datum */
 	bool		lower;			/* this is the lower (vs upper) bound */
 } PartitionRangeBound;
+#endif
 
 /* Context info needed for invoking a recursive querytree display routine */
 typedef struct
@@ -108,9 +112,6 @@ int32 qsort_partition_list_value_cmp(const void *a, const void *b, void *arg);
 PartitionRangeBound *make_one_range_bound(PartitionKey key, int index, List
 		*datums, bool lower);
 int32 qsort_partition_rbound_cmp(const void *a, const void *b, void *arg);
-int32 partition_rbound_cmp(PartitionKey key,
-					 Datum *datums1, PartitionRangeDatumKind *kind1,
-					 bool lower1, PartitionRangeBound *b2);
 void get_const_expr(Const *constval, deparse_context *context, int
 		showtype);
 void get_const_collation(Const *constval, deparse_context *context);
@@ -132,7 +133,8 @@ List *get_range_nulltest(PartitionKey key);
 void make_inh_translation_list(Relation oldrelation, Relation newrelation,
 			       Index newvarno,
 			       List **translated_vars);
-
+void set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte);
+void create_plain_partial_paths(PlannerInfo *root, RelOptInfo *rel);
 /* Copied from src/backend/catalog/partition.c, not exported */
 #define partition_bound_accepts_nulls(bi) ((bi)->null_index != -1)
 
