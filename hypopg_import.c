@@ -1254,104 +1254,104 @@ Expr *
 make_partition_op_expr(PartitionKey key, int keynum,
 		       uint16 strategy, Expr *arg1, Expr *arg2)
 {
-  Oid			operoid;
-  bool		need_relabel = false;
-  Expr	   *result = NULL;
-  
-  /* Get the correct btree operator for this partitioning column */
-  operoid = get_partition_operator(key, keynum, strategy, &need_relabel);
-  
-  /*
-   * Chosen operator may be such that the non-Const operand needs to be
-   * coerced, so apply the same; see the comment in
-   * get_partition_operator().
-   */
-  if (!IsA(arg1, Const) &&
-      (need_relabel ||
-       key->partcollation[keynum] != key->parttypcoll[keynum]))
-    arg1 = (Expr *) makeRelabelType(arg1,
-				    key->partopcintype[keynum],
-				    -1,
-				    key->partcollation[keynum],
-				    COERCE_EXPLICIT_CAST);
+	Oid			operoid;
+	bool		need_relabel = false;
+	Expr	   *result = NULL;
 
-  /* Generate the actual expression */
-  switch (key->strategy)
-    {
-    case PARTITION_STRATEGY_LIST:
-      {
-	List	   *elems = (List *) arg2;
-	int			nelems = list_length(elems);
-	
-	Assert(nelems >= 1);
-	Assert(keynum == 0);
-	
-	if (nelems > 1 &&
-	    !type_is_array(key->parttypid[keynum]))
-	  {
-	    ArrayExpr  *arrexpr;
-	    ScalarArrayOpExpr *saopexpr;
-	    
-	    /* Construct an ArrayExpr for the right-hand inputs */
-	    arrexpr = makeNode(ArrayExpr);
-	    arrexpr->array_typeid =
-	      get_array_type(key->parttypid[keynum]);
-	    arrexpr->array_collid = key->parttypcoll[keynum];
-	    arrexpr->element_typeid = key->parttypid[keynum];
-	    arrexpr->elements = elems;
-	    arrexpr->multidims = false;
-	    arrexpr->location = -1;
-	    
-	    /* Build leftop = ANY (rightop) */
-	    saopexpr = makeNode(ScalarArrayOpExpr);
-	    saopexpr->opno = operoid;
-	    saopexpr->opfuncid = get_opcode(operoid);
-	    saopexpr->useOr = true;
-	    saopexpr->inputcollid = key->partcollation[keynum];
-	    saopexpr->args = list_make2(arg1, arrexpr);
-	    saopexpr->location = -1;
-	    
-	    result = (Expr *) saopexpr;
-	  }
-	else
-	  {
-	    List	   *elemops = NIL;
-	    ListCell   *lc;
-	    
-	    foreach (lc, elems)
-	      {
-		Expr   *elem = lfirst(lc),
-		  *elemop;
-		
-		elemop = make_opclause(operoid,
-				       BOOLOID,
-				       false,
-				       arg1, elem,
-				       InvalidOid,
-				       key->partcollation[keynum]);
-		elemops = lappend(elemops, elemop);
-	      }
-	    
-	    result = nelems > 1 ? makeBoolExpr(OR_EXPR, elemops, -1) : linitial(elemops);
-	  }
-	break;
-      }
-      
-    case PARTITION_STRATEGY_RANGE:
-      result = make_opclause(operoid,
-			     BOOLOID,
-			     false,
-			     arg1, arg2,
-			     InvalidOid,
-			     key->partcollation[keynum]);
-      break;
-      
-    default:
-      elog(ERROR, "invalid partitioning strategy");
-      break;
-    }
-  
-  return result;
+	/* Get the correct btree operator for this partitioning column */
+	operoid = get_partition_operator(key, keynum, strategy, &need_relabel);
+
+	/*
+	 * Chosen operator may be such that the non-Const operand needs to be
+	 * coerced, so apply the same; see the comment in
+	 * get_partition_operator().
+	 */
+	if (!IsA(arg1, Const) &&
+			(need_relabel ||
+			 key->partcollation[keynum] != key->parttypcoll[keynum]))
+		arg1 = (Expr *) makeRelabelType(arg1,
+				key->partopcintype[keynum],
+				-1,
+				key->partcollation[keynum],
+				COERCE_EXPLICIT_CAST);
+
+	/* Generate the actual expression */
+	switch (key->strategy)
+	{
+		case PARTITION_STRATEGY_LIST:
+			{
+				List	   *elems = (List *) arg2;
+				int			nelems = list_length(elems);
+
+				Assert(nelems >= 1);
+				Assert(keynum == 0);
+
+				if (nelems > 1 &&
+						!type_is_array(key->parttypid[keynum]))
+				{
+					ArrayExpr  *arrexpr;
+					ScalarArrayOpExpr *saopexpr;
+
+					/* Construct an ArrayExpr for the right-hand inputs */
+					arrexpr = makeNode(ArrayExpr);
+					arrexpr->array_typeid =
+						get_array_type(key->parttypid[keynum]);
+					arrexpr->array_collid = key->parttypcoll[keynum];
+					arrexpr->element_typeid = key->parttypid[keynum];
+					arrexpr->elements = elems;
+					arrexpr->multidims = false;
+					arrexpr->location = -1;
+
+					/* Build leftop = ANY (rightop) */
+					saopexpr = makeNode(ScalarArrayOpExpr);
+					saopexpr->opno = operoid;
+					saopexpr->opfuncid = get_opcode(operoid);
+					saopexpr->useOr = true;
+					saopexpr->inputcollid = key->partcollation[keynum];
+					saopexpr->args = list_make2(arg1, arrexpr);
+					saopexpr->location = -1;
+
+					result = (Expr *) saopexpr;
+				}
+				else
+				{
+					List	   *elemops = NIL;
+					ListCell   *lc;
+
+					foreach (lc, elems)
+					{
+						Expr   *elem = lfirst(lc),
+							   *elemop;
+
+						elemop = make_opclause(operoid,
+								BOOLOID,
+								false,
+								arg1, elem,
+								InvalidOid,
+								key->partcollation[keynum]);
+						elemops = lappend(elemops, elemop);
+					}
+
+					result = nelems > 1 ? makeBoolExpr(OR_EXPR, elemops, -1) : linitial(elemops);
+				}
+				break;
+			}
+
+		case PARTITION_STRATEGY_RANGE:
+			result = make_opclause(operoid,
+					BOOLOID,
+					false,
+					arg1, arg2,
+					InvalidOid,
+					key->partcollation[keynum]);
+			break;
+
+		default:
+			elog(ERROR, "invalid partitioning strategy");
+			break;
+	}
+
+	return result;
 }
 
 /*
@@ -1379,84 +1379,84 @@ get_range_key_properties(PartitionKey key, int keynum,
 			 Expr **keyCol,
 			 Const **lower_val, Const **upper_val)
 {
-  /* Get partition key expression for this column */
-  if (key->partattrs[keynum] != 0)
-    {
-      *keyCol = (Expr *) makeVar(1,
-				 key->partattrs[keynum],
-				 key->parttypid[keynum],
-				 key->parttypmod[keynum],
-				 key->parttypcoll[keynum],
-				 0);
-    }
-  else
-    {
-      if (*partexprs_item == NULL)
-	elog(ERROR, "wrong number of partition key expressions");
-      *keyCol = copyObject(lfirst(*partexprs_item));
-      *partexprs_item = lnext(*partexprs_item);
-    }
+	/* Get partition key expression for this column */
+	if (key->partattrs[keynum] != 0)
+	{
+		*keyCol = (Expr *) makeVar(1,
+				key->partattrs[keynum],
+				key->parttypid[keynum],
+				key->parttypmod[keynum],
+				key->parttypcoll[keynum],
+				0);
+	}
+	else
+	{
+		if (*partexprs_item == NULL)
+			elog(ERROR, "wrong number of partition key expressions");
+		*keyCol = copyObject(lfirst(*partexprs_item));
+		*partexprs_item = lnext(*partexprs_item);
+	}
 
-  /* Get appropriate Const nodes for the bounds */
-  if (ldatum->kind == PARTITION_RANGE_DATUM_VALUE)
-    *lower_val = castNode(Const, copyObject(ldatum->value));
-  else
-    *lower_val = NULL;
+	/* Get appropriate Const nodes for the bounds */
+	if (ldatum->kind == PARTITION_RANGE_DATUM_VALUE)
+		*lower_val = castNode(Const, copyObject(ldatum->value));
+	else
+		*lower_val = NULL;
 
-  if (udatum->kind == PARTITION_RANGE_DATUM_VALUE)
-    *upper_val = castNode(Const, copyObject(udatum->value));
-  else
-    *upper_val = NULL;
+	if (udatum->kind == PARTITION_RANGE_DATUM_VALUE)
+		*upper_val = castNode(Const, copyObject(udatum->value));
+	else
+		*upper_val = NULL;
 }
 
 
- /*
-  * Copied from src/backend/catalog/partition.c, not exported
-  *
-  * get_range_nulltest
-  *
-  * A non-default range partition table does not currently allow partition
-  * keys to be null, so emit an IS NOT NULL expression for each key column.
-  */
+/*
+ * Copied from src/backend/catalog/partition.c, not exported
+ *
+ * get_range_nulltest
+ *
+ * A non-default range partition table does not currently allow partition
+ * keys to be null, so emit an IS NOT NULL expression for each key column.
+ */
 List *
 get_range_nulltest(PartitionKey key)
 {
-  List	   *result = NIL;
-  NullTest   *nulltest;
-  ListCell   *partexprs_item;
-  int			i;
-  
-  partexprs_item = list_head(key->partexprs);
-  for (i = 0; i < key->partnatts; i++)
-    {
-      Expr	   *keyCol;
-      
-      if (key->partattrs[i] != 0)
+	List	   *result = NIL;
+	NullTest   *nulltest;
+	ListCell   *partexprs_item;
+	int			i;
+
+	partexprs_item = list_head(key->partexprs);
+	for (i = 0; i < key->partnatts; i++)
 	{
-	  keyCol = (Expr *) makeVar(1,
-				    key->partattrs[i],
-				    key->parttypid[i],
-				    key->parttypmod[i],
-				    key->parttypcoll[i],
-				    0);
-	}
-      else
-	{
-	  if (partexprs_item == NULL)
-	    elog(ERROR, "wrong number of partition key expressions");
-	  keyCol = copyObject(lfirst(partexprs_item));
-	  partexprs_item = lnext(partexprs_item);
+		Expr	   *keyCol;
+
+		if (key->partattrs[i] != 0)
+		{
+			keyCol = (Expr *) makeVar(1,
+					key->partattrs[i],
+					key->parttypid[i],
+					key->parttypmod[i],
+					key->parttypcoll[i],
+					0);
+		}
+		else
+		{
+			if (partexprs_item == NULL)
+				elog(ERROR, "wrong number of partition key expressions");
+			keyCol = copyObject(lfirst(partexprs_item));
+			partexprs_item = lnext(partexprs_item);
+		}
+
+		nulltest = makeNode(NullTest);
+		nulltest->arg = keyCol;
+		nulltest->nulltesttype = IS_NOT_NULL;
+		nulltest->argisrow = false;
+		nulltest->location = -1;
+		result = lappend(result, nulltest);
 	}
 
-      nulltest = makeNode(NullTest);
-      nulltest->arg = keyCol;
-      nulltest->nulltesttype = IS_NOT_NULL;
-      nulltest->argisrow = false;
-      nulltest->location = -1;
-      result = lappend(result, nulltest);
-    }
-  
-  return result;
+	return result;
 }
 
 
