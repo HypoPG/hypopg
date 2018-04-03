@@ -1991,7 +1991,7 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *pa
 		 */
 		constraints = (List *) eval_const_expressions(root, (Node *) constraints);
 		/* FIXME this func will be modified at pg11 */
-		constraints = (List *) canonicalize_qual((Expr *) constraints);
+		constraints = (List *) canonicalize_qual((Expr *) constraints, true);
 
 		/* Fix Vars to have the desired varno */
 		if (rel->relid != 1)
