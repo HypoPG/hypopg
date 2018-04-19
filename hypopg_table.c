@@ -26,8 +26,9 @@
 #include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_class.h"
-#include "catalog/pg_inherits_fn.h"
+#include "catalog/pg_inherits.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
@@ -48,8 +49,10 @@
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/partcache.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
+#include "partitioning/partbounds.h"
 #endif
 
 #include "include/hypopg.h"
@@ -1851,50 +1854,50 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		pcinfo->parent_relid = oldsize;
 		pcinfo->child_rels = partitioned_child_rels;
 		root->pcinfo_list = lappend(root->pcinfo_list, pcinfo);
-		
+
 		/* add partition info to this rel */
 		hypo_partition_table(root, rel, parent);
 	}
-  
-	/* 
+
+	/*
 	 * If this rel is partition, we add the partition constraints to the
-	 * rte->securityQuals so that the relation which is need not be scanned 
-	 * is marked as Dummy at the set_append_rel_size() and the rel->rows is 
-	 * computed correctly at the set_baserel_size_estimates(). We shouldn't 
-	 * rewrite the rel->pages and the rel->tuples here, because they will be 
+	 * rte->securityQuals so that the relation which is need not be scanned
+	 * is marked as Dummy at the set_append_rel_size() and the rel->rows is
+	 * computed correctly at the set_baserel_size_estimates(). We shouldn't
+	 * rewrite the rel->pages and the rel->tuples here, because they will be
 	 * rewritten at the later hook.
 	 *
-	 * TODO: should comfirm that the tuples will not referred till the 
+	 * TODO: should comfirm that the tuples will not referred till the
 	 * set_baserel_size_esimates() and think about rel->reltarget->width
 	 *
 	 */
 	if (rel->reloptkind != RELOPT_BASEREL
 		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
-    {
+	{
 		List *constraints;
-		
+
 		/* get its partition constraints */
 		constraints = hypo_get_partition_constraints(root, rel, parent);
-      
+
 		/*
-		 * to compute rel->rows at set_baserel_size_estimates using parent's 
+		 * to compute rel->rows at set_baserel_size_estimates using parent's
 		 * statistics, parent's tuples and baserestrictinfo, we add the partition
 		 * constraints to its rte->securityQuals
 		 */
 		planner_rt_fetch(rel->relid, root)->securityQuals = list_make1(constraints);
-    }
+	}
 }
 
 
 /*
  * If this rel is partition, we remove the partition constraints from the
- * its rel->baserestrictinfo and rewrite some items of its RelOptInfo: 
- * the rel->pages, the rel->tuples rel->baserestrictcost. After that 
+ * its rel->baserestrictinfo and rewrite some items of its RelOptInfo:
+ * the rel->pages, the rel->tuples rel->baserestrictcost. After that
  * we call the set_plain_rel_pathlist() to re-create its pathlist using
  * the new RelOptInfo.
  *
  */
-void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel, 
+void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 							   Index rti, RangeTblEntry *rte)
 {
 	ListCell *l;
@@ -1904,19 +1907,19 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 	List *constraints = hypo_get_partition_constraints(root, rel, parent);
 	PlannerInfo *root_dummy;
 	Selectivity selectivity;
-	double pages;  
+	double pages;
 
-	/* 
-	 * get the parent's rel and copy its rel->baserestrictinfo to 
+	/*
+	 * get the parent's rel and copy its rel->baserestrictinfo to
 	 * the own rel->baserestrictinfo.
-	 * this part is inspired on set_append_rel_size().  
+	 * this part is inspired on set_append_rel_size().
 	 */
-	foreach(l, root->append_rel_list) 
+	foreach(l, root->append_rel_list)
 	{
 		AppendRelInfo *appinfo = (AppendRelInfo *)lfirst(l);
 		List *childquals = NIL;
 		Index cq_min_security = UINT_MAX;
-		ListCell *lc;        
+		ListCell *lc;
 
 		if(appinfo->child_relid == rti)
 		{
@@ -1928,19 +1931,19 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 				RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 				Node	   *childqual;
 				ListCell   *lc2;
-				
+
 				Assert(IsA(rinfo, RestrictInfo));
 				childqual = adjust_appendrel_attrs(root,
 												   (Node *) rinfo->clause,
 												   1, &appinfo);
 				childqual = eval_const_expressions(root, childqual);
-	      
+
 				/* might have gotten an AND clause, if so flatten it */
 				foreach(lc2, make_ands_implicit((Expr *) childqual))
 				{
 					Node	   *onecq = (Node *) lfirst(lc2);
 					bool		pseudoconstant;
-					
+
 					/* check for pseudoconstant (no Vars or volatile functions) */
 					pseudoconstant =
 						!contain_vars_of_level(onecq, 0) &&
@@ -1964,34 +1967,34 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 			}
 			rel->baserestrictinfo = childquals;
 			rel->baserestrict_min_security = cq_min_security;
-			break;	
+			break;
 		}
-    }
-	
-	/* 
+	}
+
+	/*
 	 * make dummy PlannerInfo to compute the selectivity, and then rewrite
 	 * tuples and pages using this selectivity
 	 */
 	root_dummy = makeNode(PlannerInfo);
 	root_dummy = root;
 	root_dummy->simple_rel_array[rti] = rel;
-	
-	selectivity = clauselist_selectivity(root_dummy, 
+
+	selectivity = clauselist_selectivity(root_dummy,
 										 constraints,
 										 0,
 										 JOIN_INNER,
 										 NULL);
-  
+
 	pages = ceil(rel->pages * selectivity);
 	rel->pages = (BlockNumber)pages;
 	rel->tuples = clamp_row_est(rel->tuples * selectivity);
-	
+
 	/* recompute the rel->baserestrictcost*/
 	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
-	
-	/* 
-	 * call the set_plain_rel_pathlist() to re-create its pathlist using 
-	 * the new RelOptInfo 
+
+	/*
+	 * call the set_plain_rel_pathlist() to re-create its pathlist using
+	 * the new RelOptInfo
 	 */
 	set_plain_rel_pathlist(root, rel, rte);
 }

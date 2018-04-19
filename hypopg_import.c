@@ -37,6 +37,14 @@
 #include "utils/ruleutils.h"
 #endif
 #include "optimizer/clauses.h"
+#if PG_VERSION_NUM >= 110000
+#include "catalog/partition.h"
+#include "optimizer/cost.h"
+#include "optimizer/paths.h"
+#include "partitioning/partbounds.h"
+#include "utils/partcache.h"
+#include "partitioning/partdefs.h"
+#endif
 #include "optimizer/planner.h"
 #include "optimizer/var.h"
 #include "parser/parse_coerce.h"
@@ -49,9 +57,8 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
-#include "include/hypopg_import.h"
 
-int max_parallel_workers_per_gather = 2;
+#include "include/hypopg_import.h"
 
 
 
@@ -819,6 +826,7 @@ make_one_range_bound(PartitionKey key, int index, List *datums, bool lower)
 
 	return bound;
 }
+
 /*
  * Copied from src/backend/catalog/partition.c, not exported
  *
@@ -831,74 +839,9 @@ qsort_partition_rbound_cmp(const void *a, const void *b, void *arg)
 	PartitionRangeBound *b2 = (*(PartitionRangeBound *const *) b);
 	PartitionKey key = (PartitionKey) arg;
 
-	return partition_rbound_cmp(key, b1->datums, b1->kind, b1->lower, b2);
-}
-
-/*
- * Copied from src/backend/catalog/partition.c, not exported
- *
- * partition_rbound_cmp
- *
- * Return for two range bounds whether the 1st one (specified in datums1,
- * kind1, and lower1) is <, =, or > the bound specified in *b2.
- *
- * Note that if the values of the two range bounds compare equal, then we take
- * into account whether they are upper or lower bounds, and an upper bound is
- * considered to be smaller than a lower bound. This is important to the way
- * that RelationBuildPartitionDesc() builds the PartitionBoundInfoData
- * structure, which only stores the upper bound of a common boundary between
- * two contiguous partitions.
- */
-int32
-partition_rbound_cmp(PartitionKey key,
-					 Datum *datums1, PartitionRangeDatumKind *kind1,
-					 bool lower1, PartitionRangeBound *b2)
-{
-	int32		cmpval = 0;		/* placate compiler */
-	int			i;
-	Datum	   *datums2 = b2->datums;
-	PartitionRangeDatumKind *kind2 = b2->kind;
-	bool		lower2 = b2->lower;
-
-	for (i = 0; i < key->partnatts; i++)
-	{
-		/*
-		 * First, handle cases where the column is unbounded, which should not
-		 * invoke the comparison procedure, and should not consider any later
-		 * columns. Note that the PartitionRangeDatumKind enum elements
-		 * compare the same way as the values they represent.
-		 */
-		if (kind1[i] < kind2[i])
-			return -1;
-		else if (kind1[i] > kind2[i])
-			return 1;
-		else if (kind1[i] != PARTITION_RANGE_DATUM_VALUE)
-
-			/*
-			 * The column bounds are both MINVALUE or both MAXVALUE. No later
-			 * columns should be considered, but we still need to compare
-			 * whether they are upper or lower bounds.
-			 */
-			break;
-
-		cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[i],
-												 key->partcollation[i],
-												 datums1[i],
-												 datums2[i]));
-		if (cmpval != 0)
-			break;
-	}
-
-	/*
-	 * If the comparison is anything other than equal, we're done. If they
-	 * compare equal though, we still have to consider whether the boundaries
-	 * are inclusive or exclusive.  Exclusive one is considered smaller of the
-	 * two.
-	 */
-	if (cmpval == 0 && lower1 != lower2)
-		cmpval = lower1 ? 1 : -1;
-
-	return cmpval;
+	return partition_rbound_cmp(key->partnatts, key->partsupfunc,
+								key->partcollation, b1->datums, b1->kind,
+								b1->lower, b2);
 }
 
 /* ----------
