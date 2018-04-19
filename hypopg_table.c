@@ -884,7 +884,8 @@ hypo_generate_part_scheme(CreateStmt *stmt, PartitionKey partkey, Oid
 {
 	MemoryContext oldcontext;
 	PartitionScheme part_scheme;
-	int			partnatts;
+	int			partnatts,
+		        i;
 
 	if (!stmt->partspec)
 		return NULL;
@@ -923,6 +924,12 @@ hypo_generate_part_scheme(CreateStmt *stmt, PartitionKey partkey, Oid
 	part_scheme->parttypbyval = (bool *) palloc(sizeof(bool) * partnatts);
 	memcpy(part_scheme->parttypbyval, partkey->parttypbyval,
 		   sizeof(bool) * partnatts);
+
+	part_scheme->partsupfunc = (FmgrInfo *)
+		palloc(sizeof(FmgrInfo) * partnatts);
+	for (i = 0; i < partnatts; i++)
+		fmgr_info_copy(&part_scheme->partsupfunc[i], &partkey->partsupfunc[i],
+					   CurrentMemoryContext);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -1759,10 +1766,8 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		int nparts, i;
 		int oldsize = root->simple_rel_array_size;
 		RangeTblEntry *rte;
-		List *partitioned_child_rels = NIL;
 		ListCell *cell;
 		AppendRelInfo *appinfo;
-		PartitionedChildRelInfo *pcinfo;
 
 		/* get all of the partition oids */
 		inhoids = hypo_find_inheritance_children(parent);
@@ -1793,8 +1798,6 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		root->simple_rte_array[rel->relid] = rte;
 		root->simple_rte_array[oldsize] = rte;
 
-		partitioned_child_rels = lappend_int(partitioned_child_rels,
-				oldsize);
 		root->parse->rtable = lappend(root->parse->rtable,
 				root->simple_rte_array[oldsize]);
 
@@ -1849,23 +1852,15 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 			i++;
 		}
 
-		/* create pcinfo hypothetically for this rel */
-		pcinfo = makeNode(PartitionedChildRelInfo);
-		pcinfo->parent_relid = oldsize;
-		pcinfo->child_rels = partitioned_child_rels;
-		root->pcinfo_list = lappend(root->pcinfo_list, pcinfo);
-
 		/* add partition info to this rel */
 		hypo_partition_table(root, rel, parent);
 	}
 
 	/*
 	 * If this rel is partition, we add the partition constraints to the
-	 * rte->securityQuals so that the relation which is need not be scanned
-	 * is marked as Dummy at the set_append_rel_size() and the rel->rows is
-	 * computed correctly at the set_baserel_size_estimates(). We shouldn't
-	 * rewrite the rel->pages and the rel->tuples here, because they will be
-	 * rewritten at the later hook.
+	 * rte->securityQuals so that the rel->rows is computed correctly at
+	 * the set_baserel_size_estimates(). We shouldn't rewrite the rel->pages
+	 * and the rel->tuples here, because they will be rewritten at the later hook.
 	 *
 	 * TODO: should comfirm that the tuples will not referred till the
 	 * set_baserel_size_esimates() and think about rel->reltarget->width
@@ -2017,6 +2012,7 @@ hypo_partition_table(PlannerInfo *root, RelOptInfo *rel, hypoTable *entry)
 	rel->boundinfo = partition_bounds_copy(partdesc->boundinfo, partkey);
 	rel->nparts = partdesc->nparts;
 	hypo_generate_partition_key_exprs(entry, rel);
+	rel->partition_qual = NIL; //FIX ME for multi-level partition
 }
 
 
@@ -2051,7 +2047,7 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *pa
 		 */
 		constraints = (List *) eval_const_expressions(root, (Node *) constraints);
 		/* FIXME this func will be modified at pg11 */
-		constraints = (List *) canonicalize_qual((Expr *) constraints, true);
+		// constraints = (List *) canonicalize_qual((Expr *) constraints, true);
 
 		/* Fix Vars to have the desired varno */
 		if (rel->relid != 1)
@@ -2994,6 +2990,3 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	return (Datum) 0;
 #endif
 }
-
-
-
