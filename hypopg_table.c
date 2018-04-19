@@ -1882,7 +1882,6 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		 * constraints to its rte->securityQuals
 		 */
 		planner_rt_fetch(rel->relid, root)->securityQuals = list_make1(constraints);
-
     }
 }
 
@@ -2050,7 +2049,6 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 	set_plain_rel_pathlist(root, rel, rte);
 }
   
-
 
 
 /*
