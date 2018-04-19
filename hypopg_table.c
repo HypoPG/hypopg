@@ -1887,58 +1887,6 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 
 
 /*
- * If this rel is need not be scanned, we have to mark it as dummy to omit it
- * from the appendrel
- *
- * It is inspired on relation_excluded_by_constraints
- */
-void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
-				  Index rti, RangeTblEntry *rte)
-{
-	hypoTable *parent;
-	List *constraints;
-	List *safe_constraints = NIL;
-	ListCell *lc;
-
-	Assert(HYPO_ENABLED());
-	Assert(hypo_table_oid_is_hypothetical(rte->relid));
-	Assert(rte->relkind == 'r');
-
-	parent = hypo_find_table(rte->relid);
-
-	/* get its partition constraints */
-	constraints = hypo_get_partition_constraints(root, rel, parent);
-
-	/*
-	 * We do not currently enforce that CHECK constraints contain only
-	 * immutable functions, so it's necessary to check here. We daren't draw
-	 * conclusions from plan-time evaluation of non-immutable functions. Since
-	 * they're ANDed, we can just ignore any mutable constraints in the list,
-	 * and reason about the rest.
-	 */
-	foreach(lc, constraints)
-	{
-		Node       *pred = (Node *) lfirst(lc);
-
-		if (!contain_mutable_functions(pred))
-			safe_constraints = lappend(safe_constraints, pred);
-	}
-
-	/* if this partition need not be scanned, we call the set_dummy_rel_pathlist()
-	 * to mark it as dummy */
-	if (predicate_refuted_by(safe_constraints, rel->baserestrictinfo, false))
-		set_dummy_rel_pathlist(rel);
-
-
-	/*
-	  TODO: re-estimate parent size just like set_append_rel_size()
-	*/
-	
-}
-
-
-
-/*
  * If this rel is partition, we remove the partition constraints from the
  * its rel->baserestrictinfo and rewrite some items of its RelOptInfo: 
  * the rel->pages, the rel->tuples rel->baserestrictcost. After that 
@@ -1946,7 +1894,6 @@ void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
  * the new RelOptInfo.
  *
  */
-
 void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel, 
 							   Index rti, RangeTblEntry *rte)
 {
@@ -1981,7 +1928,7 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 				RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 				Node	   *childqual;
 				ListCell   *lc2;
-	      
+				
 				Assert(IsA(rinfo, RestrictInfo));
 				childqual = adjust_appendrel_attrs(root,
 												   (Node *) rinfo->clause,
@@ -1993,7 +1940,7 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 				{
 					Node	   *onecq = (Node *) lfirst(lc2);
 					bool		pseudoconstant;
-		  
+					
 					/* check for pseudoconstant (no Vars or volatile functions) */
 					pseudoconstant =
 						!contain_vars_of_level(onecq, 0) &&
@@ -2038,17 +1985,17 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 	pages = ceil(rel->pages * selectivity);
 	rel->pages = (BlockNumber)pages;
 	rel->tuples = clamp_row_est(rel->tuples * selectivity);
-
+	
 	/* recompute the rel->baserestrictcost*/
 	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
-  
+	
 	/* 
 	 * call the set_plain_rel_pathlist() to re-create its pathlist using 
 	 * the new RelOptInfo 
 	 */
 	set_plain_rel_pathlist(root, rel, rte);
 }
-  
+
 
 
 /*
