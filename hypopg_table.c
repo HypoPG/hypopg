@@ -1372,9 +1372,11 @@ hypo_table_pfree(hypoTable *entry)
 	{
 		pfree(entry->part_scheme->partopfamily);
 		pfree(entry->part_scheme->partopcintype);
-		//pfree(entry->part_scheme->parttypcoll);
 		pfree(entry->part_scheme->partcollation);
+		//pfree(entry->part_scheme->parttypcoll);
 		pfree(entry->part_scheme->parttyplen);
+		pfree(entry->part_scheme->parttypbyval);
+		pfree(entry->part_scheme->partsupfunc);
 		pfree(entry->part_scheme);
 	}
 
@@ -1393,7 +1395,6 @@ hypo_table_pfree(hypoTable *entry)
 		pfree(entry->partkey->parttypbyval);
 		pfree(entry->partkey->parttypalign);
 		pfree(entry->partkey->parttypcoll);
-		pfree(entry->partkey->partcollation);
 		pfree(entry->partkey);
 	}
 
