@@ -743,10 +743,12 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 	 */
 	stmt->partspec = transformPartitionSpec(rel, stmt->partspec,
 											&strategy);
+	key->strategy = strategy;
 
 	ComputePartitionAttrs(rel, stmt->partspec->partParams,
 						  partattrs, &partexprs, partopclass,
 						  partcollation, strategy);
+
 
 	/*--- Adapted from RelationBuildPartitionKey ---*/
 {
@@ -1751,11 +1753,17 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 				    RelOptInfo *rel)
 {
 	hypoTable *parent;
+	List *inhoids;
+	int nparts;
 
 	Assert(HYPO_ENABLED());
 	Assert(hypo_table_oid_is_hypothetical(relationObjectId));
 
 	parent = hypo_find_table(relationObjectId);
+
+	/* get all of the partition oids */
+	inhoids = hypo_find_inheritance_children(parent);
+	nparts = list_length(inhoids);
 
 	/*
 	 * if this rel is parent, prepare some structures to inject
@@ -1763,16 +1771,11 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	 */
 	if(!HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
-		List *inhoids;
-		int nparts, i;
+		int i;
 		int oldsize = root->simple_rel_array_size;
 		RangeTblEntry *rte;
 		ListCell *cell;
 		AppendRelInfo *appinfo;
-
-		/* get all of the partition oids */
-		inhoids = hypo_find_inheritance_children(parent);
-		nparts = list_length(inhoids);
 
 		/* resize and clean rte and rel arrays */
 		root->simple_rel_array_size = oldsize + nparts + 1;
@@ -1858,29 +1861,39 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	}
 
 	/*
-	 * If this rel is partition, we add the partition constraints to the
-	 * rte->securityQuals so that the rel->rows is computed correctly at
+	 * If this rel is partitioned by hash, we should rewrite the rel->pages
+	 * and the rel->pages here according to the number of partitions.
+	 *
+	 * If this rel is partitioned list or range, we add the partition constraints
+	 * to the rte->securityQuals so that the rel->rows is computed correctly at
 	 * the set_baserel_size_estimates(). We shouldn't rewrite the rel->pages
 	 * and the rel->tuples here, because they will be rewritten at the later hook.
-	 *
-	 * TODO: should comfirm that the tuples will not referred till the
-	 * set_baserel_size_esimates() and think about rel->reltarget->width
-	 *
 	 */
 	if (rel->reloptkind != RELOPT_BASEREL
 		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
-		List *constraints;
+		if (parent->part_scheme->strategy == PARTITION_STRATEGY_HASH)
+		{
+			double pages;
 
-		/* get its partition constraints */
-		constraints = hypo_get_partition_constraints(root, rel, parent);
+			pages = ceil(rel->pages / nparts);
+			rel->pages = (BlockNumber)pages;
+			rel->tuples = clamp_row_est(rel->tuples / nparts);
+		}
+		else
+		{
+			List *constraints;
 
-		/*
-		 * to compute rel->rows at set_baserel_size_estimates using parent's
-		 * statistics, parent's tuples and baserestrictinfo, we add the partition
-		 * constraints to its rte->securityQuals
-		 */
-		planner_rt_fetch(rel->relid, root)->securityQuals = list_make1(constraints);
+			/* get its partition constraints */
+			constraints = hypo_get_partition_constraints(root, rel, parent);
+
+			/*
+			 * to compute rel->rows at set_baserel_size_estimates using parent's
+			 * statistics, parent's tuples and baserestrictinfo, we add the partition
+			 * constraints to its rte->securityQuals
+			 */
+			planner_rt_fetch(rel->relid, root)->securityQuals = list_make1(constraints);
+		}
 	}
 }
 
@@ -1904,6 +1917,10 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 	PlannerInfo *root_dummy;
 	Selectivity selectivity;
 	double pages;
+
+	/* If this rel is partitioned by hash, nothing to do */
+	if (parent->part_scheme->strategy == PARTITION_STRATEGY_HASH)
+		return;
 
 	/*
 	 * get the parent's rel and copy its rel->baserestrictinfo to
