@@ -743,12 +743,13 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 	 */
 	stmt->partspec = transformPartitionSpec(rel, stmt->partspec,
 											&strategy);
-	key->strategy = strategy;
 
 	ComputePartitionAttrs(rel, stmt->partspec->partParams,
 						  partattrs, &partexprs, partopclass,
 						  partcollation, strategy);
 
+	key->strategy = strategy;
+	key->partexprs = partexprs;
 
 	/*--- Adapted from RelationBuildPartitionKey ---*/
 {
@@ -852,8 +853,6 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 	heap_close(rel, AccessShareLock);
 
 
-	key->strategy = strategy;
-	key->partexprs = partexprs;
 	/*--------
 	 * Copied in previous loop
 	key->partattrs = partattrs;
