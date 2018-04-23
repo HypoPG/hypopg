@@ -77,8 +77,8 @@ static List *hypo_find_inheritance_children(hypoTable *parent);
 static PartitionDesc hypo_generate_partitiondesc(hypoTable *parent);
 static void hypo_generate_partkey(CreateStmt *stmt, Oid parentid,
 		hypoTable *entry);
-static PartitionScheme hypo_generate_part_scheme(CreateStmt *stmt,
-		PartitionKey partkey, Oid parentid);
+static PartitionScheme hypo_find_partition_scheme(PlannerInfo *root,
+												  PartitionKey partkey);
 static void hypo_generate_partition_key_exprs(hypoTable *entry,
 		RelOptInfo *rel);
 static PartitionBoundSpec *hypo_get_boundspec(Oid tableid);
@@ -875,29 +875,70 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 
 /*
  *
- * Given a CreateStmt, containing a PartitionSpec clause, generate a
- * RelOptInfo's PartitionScheme structure, or return NULL if no partspec clause
- * was provided.
+ * Given a PlannerInfo and PartitionKey, find or create a PartitionScheme for
+ * this relation.
+ *
+ * Heavily inspired on find_partition_scheme()
  */
 static PartitionScheme
-hypo_generate_part_scheme(CreateStmt *stmt, PartitionKey partkey, Oid
-		parentid)
+hypo_find_partition_scheme(PlannerInfo *root, PartitionKey partkey)
 {
-	MemoryContext oldcontext;
 	PartitionScheme part_scheme;
 	int			partnatts,
 		        i;
-
-	if (!stmt->partspec)
-		return NULL;
+	ListCell *lc;
 
 	Assert(CurrentMemoryContext != HypoMemoryContext);
 
-	oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
-
 	/* adapted from plancat.c / find_partition_scheme() */
 	Assert(partkey != NULL);
+
 	partnatts = partkey->partnatts;
+
+	foreach(lc, root->part_schemes)
+	{
+		part_scheme = lfirst(lc);
+
+		/* Match partitioning strategy and number of keys. */
+		if (partkey->strategy != part_scheme->strategy ||
+			partnatts != part_scheme->partnatts)
+			continue;
+
+		/* Match partition key type properties. */
+		if (memcmp(partkey->partopfamily, part_scheme->partopfamily,
+				   sizeof(Oid) * partnatts) != 0 ||
+			memcmp(partkey->partopcintype, part_scheme->partopcintype,
+				   sizeof(Oid) * partnatts) != 0 ||
+			memcmp(partkey->partcollation, part_scheme->partcollation,
+				   sizeof(Oid) * partnatts) != 0)
+			continue;
+
+		/*
+		 * Length and byval information should match when partopcintype
+		 * matches.
+		 */
+		Assert(memcmp(partkey->parttyplen, part_scheme->parttyplen,
+					  sizeof(int16) * partnatts) == 0);
+		Assert(memcmp(partkey->parttypbyval, part_scheme->parttypbyval,
+					  sizeof(bool) * partnatts) == 0);
+
+		/*
+		 * If partopfamily and partopcintype matched, must have the same
+		 * partition comparison functions.  Note that we cannot reliably
+		 * Assert the equality of function structs themselves for they might
+		 * be different across PartitionKey's, so just Assert for the function
+		 * OIDs.
+		 */
+#ifdef USE_ASSERT_CHECKING
+		for (i = 0; i < partkey->partnatts; i++)
+			Assert(partkey->partsupfunc[i].fn_oid ==
+				   part_scheme->partsupfunc[i].fn_oid);
+#endif
+
+		/* Found matching partition scheme. */
+		return part_scheme;
+	}
+
 
 	part_scheme = (PartitionScheme) palloc0(sizeof(PartitionSchemeData));
 	part_scheme->strategy = partkey->strategy;
@@ -932,7 +973,8 @@ hypo_generate_part_scheme(CreateStmt *stmt, PartitionKey partkey, Oid
 		fmgr_info_copy(&part_scheme->partsupfunc[i], &partkey->partsupfunc[i],
 					   CurrentMemoryContext);
 
-	MemoryContextSwitchTo(oldcontext);
+	/* Add the partitioning scheme to PlannerInfo. */
+	root->part_schemes = lappend(root->part_schemes, part_scheme);
 
 	return part_scheme;
 }
@@ -1231,7 +1273,6 @@ hypo_newTable(Oid parentid)
 	entry = (hypoTable *) palloc0(sizeof(hypoTable));
 
 	entry->tablename = palloc0(NAMEDATALEN);
-	entry->part_scheme = NULL; /* wil be generated later if needed */
 	entry->boundspec = NULL; /* wil be generated later if needed */
 	entry->partkey = NULL; /* wil be generated later if needed */
 
@@ -1369,18 +1410,6 @@ hypo_table_pfree(hypoTable *entry)
 	/* pfree all memory that has been allocated */
 	pfree(entry->tablename);
 
-	if (entry->part_scheme)
-	{
-		pfree(entry->part_scheme->partopfamily);
-		pfree(entry->part_scheme->partopcintype);
-		pfree(entry->part_scheme->partcollation);
-		//pfree(entry->part_scheme->parttypcoll);
-		pfree(entry->part_scheme->parttyplen);
-		pfree(entry->part_scheme->parttypbyval);
-		pfree(entry->part_scheme->partsupfunc);
-		pfree(entry->part_scheme);
-	}
-
 	if (entry->boundspec)
 		pfree(entry->boundspec);
 
@@ -1507,11 +1536,7 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 
 	/* The CreateStmt specified a PARTITION BY clause, store it */
 	if (stmt->partspec)
-	{
 		hypo_generate_partkey(stmt, parentid, entry);
-		entry->part_scheme = hypo_generate_part_scheme(stmt, entry->partkey,
-				parentid);
-	}
 
 	if (boundspec)
 	{
@@ -1871,7 +1896,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	if (rel->reloptkind != RELOPT_BASEREL
 		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
-		if (parent->part_scheme->strategy == PARTITION_STRATEGY_HASH)
+		if (parent->partkey->strategy == PARTITION_STRATEGY_HASH)
 		{
 			double pages;
 
@@ -1918,7 +1943,7 @@ void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
 	double pages;
 
 	/* If this rel is partitioned by hash, nothing to do */
-	if (parent->part_scheme->strategy == PARTITION_STRATEGY_HASH)
+	if (parent->partkey->strategy == PARTITION_STRATEGY_HASH)
 		return;
 
 	/*
@@ -2025,7 +2050,7 @@ hypo_partition_table(PlannerInfo *root, RelOptInfo *rel, hypoTable *entry)
 
 	partdesc = hypo_generate_partitiondesc(entry);
 	partkey = entry->partkey;
-	rel->part_scheme = entry->part_scheme;
+	rel->part_scheme = hypo_find_partition_scheme(root, partkey);
 	rel->boundinfo = partition_bounds_copy(partdesc->boundinfo, partkey);
 	rel->nparts = partdesc->nparts;
 	hypo_generate_partition_key_exprs(entry, rel);

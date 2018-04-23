@@ -39,9 +39,6 @@ typedef struct hypoTable
 								   table name for root parititon */
 	Oid			namespace;		/* Oid of the hypothetical table's schema */
 
-	/* used for partitioned relations */
-	PartitionScheme part_scheme;	/* Partitioning scheme. */
-
 	/* added for internal use */
 	PartitionBoundSpec	*boundspec;	/* Needed to generate the PartitionDesc and
 									   PartitionBoundInfo */
