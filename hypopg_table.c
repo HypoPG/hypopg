@@ -883,7 +883,6 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 static PartitionScheme
 hypo_find_partition_scheme(PlannerInfo *root, PartitionKey partkey)
 {
-	MemoryContext oldcontext;
 	PartitionScheme part_scheme;
 	int			partnatts,
 		        i;
