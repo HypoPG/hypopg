@@ -370,11 +370,12 @@ hypo_set_rel_pathlist_hook(PlannerInfo *root,
 
 
 /*
- * Reset statistics.
+ * Reset all stored entries.
  */
 Datum
 hypopg_reset(PG_FUNCTION_ARGS)
 {
 	hypo_index_reset();
+	hypo_table_reset();
 	PG_RETURN_VOID();
 }
