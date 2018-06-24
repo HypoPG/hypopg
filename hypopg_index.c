@@ -60,6 +60,7 @@
 #include "utils/syscache.h"
 
 #include "include/hypopg.h"
+#include "include/hypopg_analyze.h"
 #include "include/hypopg_index.h"
 
 #if PG_VERSION_NUM >= 90600
@@ -1579,47 +1580,12 @@ hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel)
 		 * number of line according to it
 		 */
 		Selectivity selectivity;
-		PlannerInfo *root;
-		PlannerGlobal *glob;
-		Query	   *parse;
-		List	   *rtable = NIL;
-		RangeTblEntry *rte;
 
-		/* create a fake minimal PlannerInfo */
-		root = makeNode(PlannerInfo);
+		selectivity = hypo_clauselist_selectivity(NULL, rel, entry->indpred,
+				entry->relid);
 
-		glob = makeNode(PlannerGlobal);
-		glob->boundParams = NULL;
-		root->glob = glob;
-
-		/* only 1 table: the one related to this hypothetical index */
-		rte = makeNode(RangeTblEntry);
-		rte->relkind = RTE_RELATION;
-		rte->relid = entry->relid;
-		rte->inh = false;		/* don't include inherited children */
-		rtable = lappend(rtable, rte);
-
-		parse = makeNode(Query);
-		parse->rtable = rtable;
-		root->parse = parse;
-
-		/*
-		 * allocate simple_rel_arrays and simple_rte_arrays. This function
-		 * will also setup simple_rte_arrays with the previous rte.
-		 */
-		setup_simple_rel_arrays(root);
-		/* also add our table info */
-		root->simple_rel_array[1] = rel;
-
-		/*
-		 * per comment on clause_selectivity(), JOIN_INNER must be passed if
-		 * the clause isn't a join clause, which is our case, and passing 0 to
-		 * varRelid is appropriate for restriction clause.
-		 */
-		selectivity = clauselist_selectivity(root, entry->indpred, 0,
-											 JOIN_INNER, NULL);
-
-		elog(DEBUG1, "hypopg: selectivity for index \"%s\": %lf", entry->indexname, selectivity);
+		elog(DEBUG1, "hypopg: selectivity for index \"%s\": %lf",
+				entry->indexname, selectivity);
 
 		entry->tuples = selectivity * rel->tuples;
 	}

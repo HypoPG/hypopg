@@ -17,7 +17,13 @@
 #include "postgres.h"
 #include "fmgr.h"
 
+#if PG_VERSION_NUM >= 90300
+#include "access/htup_details.h"
+#endif
+#include "utils/selfuncs.h"
+
 #include "include/hypopg.h"
+#include "include/hypopg_analyze.h"
 #include "include/hypopg_import.h"
 #include "include/hypopg_index.h"
 #include "include/hypopg_table.h"
@@ -74,11 +80,11 @@ static void hypo_get_relation_info_hook(PlannerInfo *root,
 							RelOptInfo *rel);
 static get_relation_info_hook_type prev_get_relation_info_hook = NULL;
 
-static void hypo_set_rel_pathlist_hook(PlannerInfo *root,
-									   RelOptInfo *rel,
-									   Index rti,
-									   RangeTblEntry *rte);
-static set_rel_pathlist_hook_type prev_set_rel_pathlist_hook = NULL;
+static bool hypo_get_relation_stats_hook(PlannerInfo *root,
+		RangeTblEntry *rte,
+		AttrNumber attnum,
+		VariableStatData *vardata);
+static get_relation_stats_hook_type prev_get_relation_stats_hook = NULL;
 
 static bool hypo_query_walker(Node *node);
 
@@ -98,8 +104,8 @@ _PG_init(void)
 	prev_explain_get_index_name_hook = explain_get_index_name_hook;
 	explain_get_index_name_hook = hypo_explain_get_index_name_hook;
 
-	prev_set_rel_pathlist_hook = set_rel_pathlist_hook;
-	set_rel_pathlist_hook = hypo_set_rel_pathlist_hook;
+	prev_get_relation_stats_hook = get_relation_stats_hook;
+	get_relation_stats_hook = hypo_get_relation_stats_hook;
 
 	isExplain = false;
 	hypoIndexes = NIL;
@@ -136,7 +142,7 @@ _PG_fini(void)
 	ExecutorEnd_hook = prev_ExecutorEnd_hook;
 	get_relation_info_hook = prev_get_relation_info_hook;
 	explain_get_index_name_hook = prev_explain_get_index_name_hook;
-	set_rel_pathlist_hook = prev_set_rel_pathlist_hook;
+	get_relation_stats_hook = prev_get_relation_stats_hook;
 }
 
 /*---------------------------------
@@ -339,33 +345,65 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 		/* Close the relation release the lock now */
 		heap_close(relation, AccessShareLock);
 
+#if PG_VERSION_NUM >= 100000
 		if(hypo_table_oid_is_hypothetical(relationObjectId))
+		{
 		  /*
 		   * this relation is table we want to partition hypothetical,
 		   * inject hypothetical partitioning
 		   */
 		  hypo_injectHypotheticalPartitioning(root, relationObjectId, rel);
+		}
+#endif
 
 	}
 	if (prev_get_relation_info_hook)
 		prev_get_relation_info_hook(root, relationObjectId, inhparent, rel);
 }
 
-/*
- * if this child relation is excluded by constraints, call set_dummy_rel_pathlist
- */
-static void
-hypo_set_rel_pathlist_hook(PlannerInfo *root,
-						   RelOptInfo *rel,
-						   Index rti,
-						   RangeTblEntry *rte)
+static bool
+hypo_get_relation_stats_hook(PlannerInfo *root,
+		RangeTblEntry *rte,
+		AttrNumber attnum,
+		VariableStatData *vardata)
 {
-	if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid)
-	   && rte->relkind == 'r')
-		hypo_setPartitionPathlist(root,rel,rti,rte);
+#if PG_VERSION_NUM < 100000
+	return false;
+#else
+	Oid poid = InvalidOid;
+	hypoStatsKey key;
+	hypoStatsEntry *entry;
+	bool found;
 
-	if (prev_set_rel_pathlist_hook)
-		prev_set_rel_pathlist_hook(root, rel, rti, rte);
+	/* Fast exit if the local hash hasn't been created yet */
+	if (!hypoStatsHash)
+		return false;
+
+	/* Nothing to do if it's not a hypothetical partition */
+	if (!rte->values_lists)
+		return false;
+
+	/* At this point, we have a hypothetical partition.  Get its oid */
+	poid = linitial_oid(rte->values_lists);
+	if (poid == InvalidOid)
+		/* This should not happen */
+		return false;
+
+	/* Retrieve the pg_statistic stored row */
+	memset(&key, 0, sizeof(hypoStatsKey));
+	key.relid = poid;
+	key.attnum = attnum;
+	entry = hash_search(hypoStatsHash, &key, HASH_FIND, &found);
+
+	/* XXX should we warn about possible very bad estimation? */
+	if (!found)
+		return false;
+
+	vardata->statsTuple = heap_copytuple(entry->statsTuple);
+	vardata->freefunc = (void *) pfree;
+
+	return true;
+#endif
 }
 
 
@@ -376,6 +414,8 @@ Datum
 hypopg_reset(PG_FUNCTION_ARGS)
 {
 	hypo_index_reset();
+#if PG_VERSION_NUM >= 100000
 	hypo_table_reset();
+#endif
 	PG_RETURN_VOID();
 }

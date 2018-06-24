@@ -34,6 +34,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/relation.h"
 #include "nodes/nodes.h"
+#include "nodes/pg_list.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
@@ -56,6 +57,7 @@
 #endif
 
 #include "include/hypopg.h"
+#include "include/hypopg_analyze.h"
 #include "include/hypopg_table.h"
 
 /*--- Variables exported ---*/
@@ -89,7 +91,6 @@ static hypoTable *hypo_newTable(Oid parentid);
 static Oid hypo_table_find_parent_entry(hypoTable *entry);
 static Oid hypo_table_find_parent_oid(Oid parentid);
 static Oid hypo_table_find_root_oid(hypoTable *entry);
-static hypoTable *hypo_find_table(Oid tableid);
 static bool hypo_table_name_is_hypothetical(const char *name);
 static void hypo_table_pfree(hypoTable *entry);
 static bool hypo_table_remove(Oid tableid);
@@ -99,9 +100,6 @@ static PartitionBoundSpec *hypo_transformPartitionBound(ParseState *pstate,
 		hypoTable *parent, PartitionBoundSpec *spec);
 static void hypo_partition_table(PlannerInfo *root, RelOptInfo *rel,
 				 hypoTable *entry);
-static List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
-					    hypoTable *parent);
-static List *hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec);
 static List *hypo_get_qual_for_hash(hypoTable *parent, PartitionBoundSpec *spec);
 static List *hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec);
 static List *hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec,
@@ -109,7 +107,6 @@ static List *hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec
 
 #define HYPO_RTI_IS_TAGGED(rti, root) (planner_rt_fetch(rti, root)->security_barrier)
 #define HYPO_TAG_RTI(rti, root) (planner_rt_fetch(rti, root)->security_barrier = true)
-
 
 
 /* Add an hypoTable to hypoTables */
@@ -415,9 +412,9 @@ hypo_generate_partitiondesc(hypoTable *parent)
 					continue;
 				}
 
-				lower = make_one_range_bound(key, i, spec->lowerdatums,
+				lower = make_one_partition_rbound(key, i, spec->lowerdatums,
 											 true);
-				upper = make_one_range_bound(key, i, spec->upperdatums,
+				upper = make_one_partition_rbound(key, i, spec->upperdatums,
 											 false);
 				all_bounds[ndatums++] = lower;
 				all_bounds[ndatums++] = upper;
@@ -1347,7 +1344,7 @@ hypo_table_find_root_oid(hypoTable *entry)
  * Return the stored hypothetical table corresponding to the Oid if any,
  * otherwise return NULL
  */
-static hypoTable *
+hypoTable *
 hypo_find_table(Oid tableid)
 {
 	ListCell *lc;
@@ -1438,7 +1435,8 @@ hypo_table_pfree(hypoTable *entry)
 /*
  * Remove an hypothetical table (or unpartition a previously hypothetically
  * partitioned table) from the list of hypothetical tables.  pfree (by calling
- * hypo_table_pfree) all memory that has been allocated.
+ * hypo_table_pfree) all memory that has been allocated.  Also free all stored
+ * hypothetical statistics belonging to it if any.
  */
 static bool
 hypo_table_remove(Oid tableid)
@@ -1451,6 +1449,11 @@ hypo_table_remove(Oid tableid)
 
 		if (entry->oid == tableid)
 		{
+#if PG_VERSION_NUM >= 100000
+			/* Remove any stored statistics */
+			hypo_stat_remove(tableid);
+#endif
+
 			hypoTables = list_delete_ptr(hypoTables, entry);
 			hypo_table_pfree(entry);
 			return true;
@@ -1901,141 +1904,28 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 			double pages;
 
 			pages = ceil(rel->pages / nparts);
-			rel->pages = (BlockNumber)pages;
+			rel->pages = (BlockNumber) pages;
 			rel->tuples = clamp_row_est(rel->tuples / nparts);
 		}
 		else
 		{
-			List *constraints;
+			Selectivity selectivity;
+			double pages;
 
-			/* get its partition constraints */
-			constraints = hypo_get_partition_constraints(root, rel, parent);
+			selectivity = hypo_clauselist_selectivity(root, rel, NIL,
+					parent->oid);
 
-			/*
-			 * to compute rel->rows at set_baserel_size_estimates using parent's
-			 * statistics, parent's tuples and baserestrictinfo, we add the partition
-			 * constraints to its rte->securityQuals
-			 */
-			planner_rt_fetch(rel->relid, root)->securityQuals = list_make1(constraints);
+			elog(DEBUG1, "hypopg: selectivity for partition \"%s\": %lf",
+					hypo_find_table(linitial_oid(planner_rt_fetch(rel->relid,
+								root)->values_lists))->tablename,
+					selectivity);
+
+			pages = ceil(rel->pages * selectivity);
+			rel->pages = (BlockNumber) pages;
+			rel->tuples = clamp_row_est(rel->tuples * selectivity);
 		}
 	}
 }
-
-
-/*
- * If this rel is partition, we remove the partition constraints from the
- * its rel->baserestrictinfo and rewrite some items of its RelOptInfo:
- * the rel->pages, the rel->tuples rel->baserestrictcost. After that
- * we call the set_plain_rel_pathlist() to re-create its pathlist using
- * the new RelOptInfo.
- *
- */
-void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
-							   Index rti, RangeTblEntry *rte)
-{
-	ListCell *l;
-	Index parentRTindex;
-	RelOptInfo *parentrel;
-	hypoTable *parent = hypo_find_table(rte->relid);
-	List *constraints = hypo_get_partition_constraints(root, rel, parent);
-	PlannerInfo *root_dummy;
-	Selectivity selectivity;
-	double pages;
-
-	/* If this rel is partitioned by hash, nothing to do */
-	if (parent->partkey->strategy == PARTITION_STRATEGY_HASH)
-		return;
-
-	/*
-	 * get the parent's rel and copy its rel->baserestrictinfo to
-	 * the own rel->baserestrictinfo.
-	 * this part is inspired on set_append_rel_size().
-	 */
-	foreach(l, root->append_rel_list)
-	{
-		AppendRelInfo *appinfo = (AppendRelInfo *)lfirst(l);
-		List *childquals = NIL;
-		Index cq_min_security = UINT_MAX;
-		ListCell *lc;
-
-		if(appinfo->child_relid == rti)
-		{
-			parentRTindex = appinfo->parent_relid;
-			parentrel = root->simple_rel_array[parentRTindex];
-
-			foreach(lc, parentrel->baserestrictinfo)
-			{
-				RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
-				Node	   *childqual;
-				ListCell   *lc2;
-
-				Assert(IsA(rinfo, RestrictInfo));
-				childqual = adjust_appendrel_attrs(root,
-												   (Node *) rinfo->clause,
-												   1, &appinfo);
-				childqual = eval_const_expressions(root, childqual);
-
-				/* might have gotten an AND clause, if so flatten it */
-				foreach(lc2, make_ands_implicit((Expr *) childqual))
-				{
-					Node	   *onecq = (Node *) lfirst(lc2);
-					bool		pseudoconstant;
-
-					/* check for pseudoconstant (no Vars or volatile functions) */
-					pseudoconstant =
-						!contain_vars_of_level(onecq, 0) &&
-						!contain_volatile_functions(onecq);
-					if (pseudoconstant)
-					{
-						/* tell createplan.c to check for gating quals */
-						root->hasPseudoConstantQuals = true;
-					}
-					/* reconstitute RestrictInfo with appropriate properties */
-					childquals = lappend(childquals,
-										 make_restrictinfo((Expr *) onecq,
-														   rinfo->is_pushed_down,
-														   rinfo->outerjoin_delayed,
-														   pseudoconstant,
-														   rinfo->security_level,
-														   NULL, NULL, NULL));
-					/* track minimum security level among child quals */
-					cq_min_security = Min(cq_min_security, rinfo->security_level);
-				}
-			}
-			rel->baserestrictinfo = childquals;
-			rel->baserestrict_min_security = cq_min_security;
-			break;
-		}
-	}
-
-	/*
-	 * make dummy PlannerInfo to compute the selectivity, and then rewrite
-	 * tuples and pages using this selectivity
-	 */
-	root_dummy = makeNode(PlannerInfo);
-	root_dummy = root;
-	root_dummy->simple_rel_array[rti] = rel;
-
-	selectivity = clauselist_selectivity(root_dummy,
-										 constraints,
-										 0,
-										 JOIN_INNER,
-										 NULL);
-
-	pages = ceil(rel->pages * selectivity);
-	rel->pages = (BlockNumber)pages;
-	rel->tuples = clamp_row_est(rel->tuples * selectivity);
-
-	/* recompute the rel->baserestrictcost*/
-	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
-
-	/*
-	 * call the set_plain_rel_pathlist() to re-create its pathlist using
-	 * the new RelOptInfo
-	 */
-	set_plain_rel_pathlist(root, rel, rte);
-}
-
 
 
 /*
@@ -2063,7 +1953,7 @@ hypo_partition_table(PlannerInfo *root, RelOptInfo *rel, hypoTable *entry)
  *
  * It is inspired on get_relation_constraints()
  */
-static List *
+List *
 hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *parent)
 {
 	ListCell *lc;
@@ -2106,7 +1996,7 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *pa
  *
  * Heavily inspired on get_qual_from_partbound
  */
-static List *
+List *
 hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec)
 {
 	PartitionKey key = parent->partkey;

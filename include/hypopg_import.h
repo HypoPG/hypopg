@@ -12,10 +12,13 @@
 #ifndef _HYPOPG_IMPORT_H_
 #define _HYPOPG_IMPORT_H_
 
+#include "commands/vacuum.h"
 #include "nodes/pg_list.h"
 #include "optimizer/planner.h"
 #include "optimizer/pathnode.h"
+#if PG_VERSION_NUM >= 100000
 #include "partitioning/partbounds.h"
+#endif
 #include "utils/rel.h"
 
 
@@ -106,11 +109,7 @@ void ComputePartitionAttrs(Relation rel, List *partParams, AttrNumber
 char *get_relation_name(Oid relid);
 bool looks_like_function(Node *node);
 int32 qsort_partition_hbound_cmp(const void *a, const void *b);
-int32 partition_hbound_cmp(int modulus1, int remainder1, int modulus2, int
-		remainder2);
 int32 qsort_partition_list_value_cmp(const void *a, const void *b, void *arg);
-PartitionRangeBound *make_one_range_bound(PartitionKey key, int index, List
-		*datums, bool lower);
 int32 qsort_partition_rbound_cmp(const void *a, const void *b, void *arg);
 void get_const_expr(Const *constval, deparse_context *context, int
 		showtype);
@@ -133,8 +132,8 @@ List *get_range_nulltest(PartitionKey key);
 void make_inh_translation_list(Relation oldrelation, Relation newrelation,
 			       Index newvarno,
 			       List **translated_vars);
-void set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte);
-void create_plain_partial_paths(PlannerInfo *root, RelOptInfo *rel);
+VacAttrStats *examine_attribute(Relation onerel, int attnum, Node *index_expr);
+Datum std_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull);
 /* Copied from src/backend/catalog/partition.c, not exported */
 #define partition_bound_accepts_nulls(bi) ((bi)->null_index != -1)
 

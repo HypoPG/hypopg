@@ -64,13 +64,15 @@ Datum		hypopg_drop_table(PG_FUNCTION_ARGS);
 Datum		hypopg_partition_table(PG_FUNCTION_ARGS);
 Datum		hypopg_reset_table(PG_FUNCTION_ARGS);
 
+#if PG_VERSION_NUM >= 100000
+hypoTable *hypo_find_table(Oid tableid);
+List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
+					    hypoTable *parent);
+List *hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec);
 bool hypo_table_oid_is_hypothetical(Oid relid);
 void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 					 Oid relationObjectId,
 					 RelOptInfo *rel);
-void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
-			      Index rti, RangeTblEntry *rte);
-void hypo_setPartitionPathlist(PlannerInfo *root, RelOptInfo *rel,
-			      Index rti, RangeTblEntry *rte);
+#endif
 
 #endif

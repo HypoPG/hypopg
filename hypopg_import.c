@@ -744,23 +744,6 @@ qsort_partition_hbound_cmp(const void *a, const void *b)
 }
 
 /*
- * partition_hbound_cmp
- *
- * Compares modulus first, then remainder if modulus are equal.
- */
-int32
-partition_hbound_cmp(int modulus1, int remainder1, int modulus2, int remainder2)
-{
-	if (modulus1 < modulus2)
-		return -1;
-	if (modulus1 > modulus2)
-		return 1;
-	if (modulus1 == modulus2 && remainder1 != remainder2)
-		return (remainder1 > remainder2) ? 1 : -1;
-	return 0;
-}
-
-/*
  * Copied from src/backend/catalog/partition.c, not exported
  *
  * qsort_partition_list_value_cmp
@@ -777,54 +760,6 @@ qsort_partition_list_value_cmp(const void *a, const void *b, void *arg)
 	return DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[0],
 										   key->partcollation[0],
 										   val1, val2));
-}
-
-/*
- * Copied from src/backend/catalog/partition.c, not exported
- *
- * make_one_range_bound
- *
- * Return a PartitionRangeBound given a list of PartitionRangeDatum elements
- * and a flag telling whether the bound is lower or not.  Made into a function
- * because there are multiple sites that want to use this facility.
- */
-PartitionRangeBound *
-make_one_range_bound(PartitionKey key, int index, List *datums, bool lower)
-{
-	PartitionRangeBound *bound;
-	ListCell   *lc;
-	int			i;
-
-	Assert(datums != NIL);
-
-	bound = (PartitionRangeBound *) palloc0(sizeof(PartitionRangeBound));
-	bound->index = index;
-	bound->datums = (Datum *) palloc0(key->partnatts * sizeof(Datum));
-	bound->kind = (PartitionRangeDatumKind *) palloc0(key->partnatts *
-													  sizeof(PartitionRangeDatumKind));
-	bound->lower = lower;
-
-	i = 0;
-	foreach(lc, datums)
-	{
-		PartitionRangeDatum *datum = castNode(PartitionRangeDatum, lfirst(lc));
-
-		/* What's contained in this range datum? */
-		bound->kind[i] = datum->kind;
-
-		if (datum->kind == PARTITION_RANGE_DATUM_VALUE)
-		{
-			Const	   *val = castNode(Const, datum->value);
-
-			if (val->constisnull)
-				elog(ERROR, "invalid range bound datum");
-			bound->datums[i] = val->constvalue;
-		}
-
-		i++;
-	}
-
-	return bound;
 }
 
 /*
@@ -1510,57 +1445,120 @@ make_inh_translation_list(Relation oldrelation, Relation newrelation,
 
 
 /*
- * Copied from src/backend/optimizer/path/allpaths.c, not exported
+ * Copied from src/backend/commands/analyze.c/, not exported
  *
- * set_plain_rel_pathlist
- *	  Build access paths for a plain relation (no subquery, no inheritance)
+ * examine_attribute -- pre-analysis of a single column
+ *
+ * Determine whether the column is analyzable; if so, create and initialize
+ * a VacAttrStats struct for it.  If not, return NULL.
+ *
+ * If index_expr isn't NULL, then we're trying to analyze an expression index,
+ * and index_expr is the expression tree representing the column's data.
  */
-void
-set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+VacAttrStats *
+examine_attribute(Relation onerel, int attnum, Node *index_expr)
 {
-	Relids		required_outer;
+	Form_pg_attribute attr = TupleDescAttr(onerel->rd_att, attnum - 1);
+	HeapTuple	typtuple;
+	VacAttrStats *stats;
+	int			i;
+	bool		ok;
+
+	/* Never analyze dropped columns */
+	if (attr->attisdropped)
+		return NULL;
+
+	/* Don't analyze column if user has specified not to */
+	if (attr->attstattarget == 0)
+		return NULL;
 
 	/*
-	 * We don't support pushing join clauses into the quals of a seqscan, but
-	 * it could still have required parameterization due to LATERAL refs in
-	 * its tlist.
+	 * Create the VacAttrStats struct.  Note that we only have a copy of the
+	 * fixed fields of the pg_attribute tuple.
 	 */
-	required_outer = rel->lateral_relids;
+	stats = (VacAttrStats *) palloc0(sizeof(VacAttrStats));
+	stats->attr = (Form_pg_attribute) palloc(ATTRIBUTE_FIXED_PART_SIZE);
+	memcpy(stats->attr, attr, ATTRIBUTE_FIXED_PART_SIZE);
 
-	/* Consider sequential scan */
-	add_path(rel, create_seqscan_path(root, rel, required_outer, 0));
+	/*
+	 * When analyzing an expression index, believe the expression tree's type
+	 * not the column datatype --- the latter might be the opckeytype storage
+	 * type of the opclass, which is not interesting for our purposes.  (Note:
+	 * if we did anything with non-expression index columns, we'd need to
+	 * figure out where to get the correct type info from, but for now that's
+	 * not a problem.)	It's not clear whether anyone will care about the
+	 * typmod, but we store that too just in case.
+	 */
+	if (index_expr)
+	{
+		stats->attrtypid = exprType(index_expr);
+		stats->attrtypmod = exprTypmod(index_expr);
+	}
+	else
+	{
+		stats->attrtypid = attr->atttypid;
+		stats->attrtypmod = attr->atttypmod;
+	}
 
-	/* If appropriate, consider parallel sequential scan */
-	if (rel->consider_parallel && required_outer == NULL)
-		create_plain_partial_paths(root, rel);
+	typtuple = SearchSysCacheCopy1(TYPEOID,
+								   ObjectIdGetDatum(stats->attrtypid));
+	if (!HeapTupleIsValid(typtuple))
+		elog(ERROR, "cache lookup failed for type %u", stats->attrtypid);
+	stats->attrtype = (Form_pg_type) GETSTRUCT(typtuple);
+	//FIXME
+	stats->anl_context = CurrentMemoryContext;
+	stats->tupattnum = attnum;
 
-	/* Consider index scans */
-	create_index_paths(root, rel);
+	/*
+	 * The fields describing the stats->stavalues[n] element types default to
+	 * the type of the data being analyzed, but the type-specific typanalyze
+	 * function can change them if it wants to store something else.
+	 */
+	for (i = 0; i < STATISTIC_NUM_SLOTS; i++)
+	{
+		stats->statypid[i] = stats->attrtypid;
+		stats->statyplen[i] = stats->attrtype->typlen;
+		stats->statypbyval[i] = stats->attrtype->typbyval;
+		stats->statypalign[i] = stats->attrtype->typalign;
+	}
 
-	/* Consider TID scans */
-	create_tidscan_paths(root, rel);
+	/*
+	 * Call the type-specific typanalyze function.  If none is specified, use
+	 * std_typanalyze().
+	 */
+	if (OidIsValid(stats->attrtype->typanalyze))
+		ok = DatumGetBool(OidFunctionCall1(stats->attrtype->typanalyze,
+										   PointerGetDatum(stats)));
+	else
+		ok = std_typanalyze(stats);
+
+	if (!ok || stats->compute_stats == NULL || stats->minrows <= 0)
+	{
+		heap_freetuple(typtuple);
+		pfree(stats->attr);
+		pfree(stats);
+		return NULL;
+	}
+
+	return stats;
 }
 
 /*
- * Copied from src/backend/optimizer/path/allpaths.c, not exported
+ * Copied from src/backend/commands/analyze.c, not exported
  *
- * create_plain_partial_paths
- *	  Build partial access paths for parallel scan of a plain relation
+ * Standard fetch function for use by compute_stats subroutines.
+ *
+ * This exists to provide some insulation between compute_stats routines
+ * and the actual storage of the sample data.
  */
-void
-create_plain_partial_paths(PlannerInfo *root, RelOptInfo *rel)
+Datum
+std_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull)
 {
-	int			parallel_workers;
+	int			attnum = stats->tupattnum;
+	HeapTuple	tuple = stats->rows[rownum];
+	TupleDesc	tupDesc = stats->tupDesc;
 
-	parallel_workers = compute_parallel_worker(rel, rel->pages, -1,
-						   max_parallel_workers_per_gather);
-
-	/* If any limit was set to zero, the user doesn't want a parallel scan. */
-	if (parallel_workers <= 0)
-		return;
-
-	/* Add an unordered partial path based on a parallel sequential scan. */
-	add_partial_path(rel, create_seqscan_path(root, rel, NULL, parallel_workers));
+	return heap_getattr(tuple, attnum, tupDesc, isNull);
 }
 
 

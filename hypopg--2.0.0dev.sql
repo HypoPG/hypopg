@@ -98,3 +98,8 @@ CREATE FUNCTION hypopg_table(OUT relid oid, OUT tablename text,
     RETURNS SETOF record
     LANGUAGE c COST 100
 AS '$libdir/hypopg', 'hypopg_table';
+
+CREATE FUNCTION hypopg_analyze(IN tablename regclass, IN fraction real = 1)
+    RETURNS void
+    LANGUAGE c COST 100
+AS '$libdir/hypopg', 'hypopg_analyze';
