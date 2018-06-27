@@ -16,11 +16,13 @@
 
 #include "postgres.h"
 #include "fmgr.h"
+#include "miscadmin.h"
 
 #if PG_VERSION_NUM >= 90300
 #include "access/htup_details.h"
 #endif
 #include "utils/selfuncs.h"
+#include "utils/syscache.h"
 
 #include "include/hypopg.h"
 #include "include/hypopg_analyze.h"
@@ -374,6 +376,42 @@ hypo_get_relation_stats_hook(PlannerInfo *root,
 	hypoStatsKey key;
 	hypoStatsEntry *entry;
 	bool found;
+
+	/* Nothing to do if it's not a plain relation */
+	if (rte->rtekind != RTE_RELATION)
+		return false;
+
+	/*
+	 * If this is a root table hypothetically partitioned, we have to retrieve
+	 * the pg_statistic row ourselves, even if no hypopg_analyze has been
+	 * performed yet, because postgres will search for an entry with stainherit
+	 * = true, which won't exist.
+	 */
+	if (rte->security_barrier && (rte->values_lists == NIL))
+	{
+		vardata->statsTuple = SearchSysCache3(STATRELATTINH,
+											  ObjectIdGetDatum(rte->relid),
+											  Int16GetDatum(attnum),
+											  BoolGetDatum(false));
+		vardata->freefunc = ReleaseSysCache;
+
+		if (HeapTupleIsValid(vardata->statsTuple))
+		{
+			/* check if user has permission to read this column */
+			vardata->acl_ok =
+				(pg_class_aclcheck(rte->relid, GetUserId(),
+								   ACL_SELECT) == ACLCHECK_OK) ||
+				(pg_attribute_aclcheck(rte->relid, attnum, GetUserId(),
+									   ACL_SELECT) == ACLCHECK_OK);
+		}
+		else
+		{
+			/* suppress any possible leakproofness checks later */
+			vardata->acl_ok = true;
+		}
+
+		return true;
+	}
 
 	/* Fast exit if the local hash hasn't been created yet */
 	if (!hypoStatsHash)
