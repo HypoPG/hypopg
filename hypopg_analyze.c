@@ -15,6 +15,10 @@
  */
 
 #include "postgres.h"
+#include "fmgr.h"
+
+#include "funcapi.h"
+#include "miscadmin.h"
 
 #ifdef _MSC_VER
 #include <float.h>				/* for _isnan */
@@ -27,7 +31,6 @@
 #endif
 #include "commands/vacuum.h"
 #include "executor/spi.h"
-#include "miscadmin.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "parser/parsetree.h"
@@ -56,6 +59,7 @@ static MemoryContext anl_context = NULL;
 /*--- Functions --- */
 
 PG_FUNCTION_INFO_V1(hypopg_analyze);
+PG_FUNCTION_INFO_V1(hypopg_statistic);
 
 #if PG_VERSION_NUM >= 100000
 static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
@@ -552,6 +556,79 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	relation_close(onerel, AccessShareLock);
 	relation_close(pgstats, AccessShareLock);
 
+
+	return (Datum) 0;
+#endif
+}
+
+
+/*
+ * SQL wrapper to retrieve the list of stored statistics.
+ */
+Datum
+hypopg_statistic(PG_FUNCTION_ARGS)
+{
+#if PG_VERSION_NUM < 100000
+HYPO_PARTITION_NOT_SUPPORTED();
+#else
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	HASH_SEQ_STATUS hash_seq;
+	hypoStatsEntry *entry;
+	Relation		pgstats;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	if (!hypoStatsHash)
+		return (Datum) 0;
+
+	pgstats = heap_open(StatisticRelationId, AccessShareLock);
+
+	hash_seq_init(&hash_seq, hypoStatsHash);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	{
+		Datum		values[Natts_pg_statistic];
+		bool		nulls[Natts_pg_statistic];
+
+		memset(values, 0, sizeof(values));
+		memset(nulls, 0, sizeof(nulls));
+
+		heap_deform_tuple(entry->statsTuple, RelationGetDescr(pgstats),
+				values, nulls);
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	relation_close(pgstats, AccessShareLock);
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
 
 	return (Datum) 0;
 #endif
