@@ -75,7 +75,16 @@ PG_FUNCTION_INFO_V1(hypopg_table);
 
 #if PG_VERSION_NUM >= 100000
 static void hypo_addTable(hypoTable *entry);
+static int hypo_expand_partitioned_entry(PlannerInfo *root, Oid
+		relationObjectId, RelOptInfo *rel, Relation parentrel,
+		hypoTable *branch, int firstpos, int parent_rti);
+static void hypo_expand_single_inheritance_child(PlannerInfo *root,
+		Oid relationObjectId, RelOptInfo *rel, Relation parentrel,
+		hypoTable *branch, RangeTblEntry *rte, hypoTable *child, Oid newrelid,
+		int parent_rti, bool expandBranch);
 static List *hypo_find_inheritance_children(hypoTable *parent);
+static List *hypo_get_qual_from_partbound(hypoTable *parent,
+		PartitionBoundSpec *spec);
 static PartitionDesc hypo_generate_partitiondesc(hypoTable *parent);
 static void hypo_generate_partkey(CreateStmt *stmt, Oid parentid,
 		hypoTable *entry);
@@ -88,17 +97,15 @@ static Oid hypo_get_default_partition_oid(Oid parentid);
 static char *hypo_get_partbounddef(hypoTable *entry);
 static char *hypo_get_partkeydef(hypoTable *entry);
 static hypoTable *hypo_newTable(Oid parentid);
-static Oid hypo_table_find_parent_entry(hypoTable *entry);
-static Oid hypo_table_find_parent_oid(Oid parentid);
-static Oid hypo_table_find_root_oid(hypoTable *entry);
-static bool hypo_table_name_is_hypothetical(const char *name);
+static hypoTable *hypo_table_find_parent_oid(Oid parentid);
+static hypoTable *hypo_table_name_get_entry(const char *name);
 static void hypo_table_pfree(hypoTable *entry);
 static bool hypo_table_remove(Oid tableid);
 static const hypoTable *hypo_table_store_parsetree(CreateStmt *node,
-						   const char *queryString, Oid parentid);
+						   const char *queryString, Oid parentid, Oid rootid);
 static PartitionBoundSpec *hypo_transformPartitionBound(ParseState *pstate,
 		hypoTable *parent, PartitionBoundSpec *spec);
-static void hypo_partition_table(PlannerInfo *root, RelOptInfo *rel,
+static void hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 				 hypoTable *entry);
 static List *hypo_get_qual_for_hash(hypoTable *parent, PartitionBoundSpec *spec);
 static List *hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec);
@@ -120,6 +127,191 @@ hypo_addTable(hypoTable *entry)
 	hypoTables = lappend(hypoTables, entry);
 
 	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Adaptation of expand_partitioned_rtentry
+ */
+static int
+hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
+		RelOptInfo *rel, Relation parentrel, hypoTable *branch, int firstpos,
+		int parent_rti)
+{
+	hypoTable *parent;
+	List *inhoids;
+	int nparts;
+	RangeTblEntry *rte;
+	ListCell *cell;
+	int newrelid, oldsize = root->simple_rel_array_size;
+	int i;
+
+	Assert(hypo_table_oid_is_hypothetical(relationObjectId));
+
+	if (!branch)
+		parent = hypo_find_table(relationObjectId, false);
+	else
+		parent = branch;
+
+	/* get all of the partition oids */
+	inhoids = hypo_find_inheritance_children(parent);
+	nparts = list_length(inhoids);
+
+	/*
+	 * resize and clean rte and rel arrays.  We need a slot for self expansion
+	 * and one per partition
+	 */
+	root->simple_rel_array_size += nparts + 1;
+
+	root->simple_rel_array = (RelOptInfo **)
+		repalloc(root->simple_rel_array,
+				root->simple_rel_array_size *
+				sizeof(RelOptInfo *));
+	root->simple_rte_array = (RangeTblEntry **)
+		repalloc(root->simple_rte_array,
+				root->simple_rel_array_size *
+				sizeof(RangeTblEntry *));
+
+	for (i=oldsize; i<root->simple_rel_array_size; i++)
+	{
+		root->simple_rel_array[i] = NULL;
+		root->simple_rte_array[i] = NULL;
+	}
+
+	/* Get the rte from the root partition */
+	rte = root->simple_rte_array[rel->relid];
+
+	/*  if this is not the root partition, update the basic metadata */
+	if (!branch)
+	{
+		Assert(parent_rti == -1);
+
+		rte->relkind = RELKIND_PARTITIONED_TABLE;
+		rte->inh = true;
+		HYPO_TAG_RTI(rel->relid, root);
+	}
+	else /* branch partition, expand it */
+	{
+		/* The rte we retrieved has already been updated */
+		Assert(rte->relkind == RELKIND_PARTITIONED_TABLE);
+
+		rte = copyObject(rte);
+		if(!rte->alias)
+			rte->alias = makeNode(Alias);
+		rte->alias->aliasname = branch->tablename;
+
+		hypo_expand_single_inheritance_child(root, relationObjectId, rel,
+				parentrel, branch, rte, branch, firstpos, parent_rti, true);
+
+		firstpos++;
+	}
+
+	/* add the partitioned table itself */
+	root->simple_rte_array[firstpos] = rte;
+
+	root->parse->rtable = lappend(root->parse->rtable,
+			root->simple_rte_array[firstpos]);
+
+	HYPO_TAG_RTI(firstpos, root);
+
+	/*
+	 * create RangeTblEntries and AppendRelInfos hypothetically
+	 * for all hypothetical partitions
+	 */
+	newrelid = firstpos + 1;
+	foreach(cell, inhoids)
+	{
+		Oid childOid = lfirst_oid(cell);
+		hypoTable *child;
+
+		child = hypo_find_table(childOid, false);
+
+		/* Expand the child if it's partitioned */
+		if (child->partkey)
+		{
+			/*
+			 * firstpos-1 is the ancestor rti for expanded children of
+			 * this branch.
+			 */
+			newrelid = hypo_expand_partitioned_entry(root, relationObjectId,
+					rel, parentrel, child, newrelid, firstpos-1);
+			continue;
+		}
+
+		/* firstpos-1 is the ancestor rti of this children */
+		hypo_expand_single_inheritance_child(root, relationObjectId, rel,
+				parentrel, branch, rte, child, newrelid, firstpos-1, false);
+
+		newrelid++;
+	}
+
+	/* add partition info for root partition */
+	if (!branch)
+		hypo_set_relation_partition_info(root, rel, parent);
+
+	return newrelid;
+}
+
+/*
+ * Adaptation of expand_single_inheritance_child
+ */
+static void
+hypo_expand_single_inheritance_child(PlannerInfo *root, Oid relationObjectId,
+		RelOptInfo *rel, Relation parentrel, hypoTable *branch,
+		RangeTblEntry *rte, hypoTable *child, Oid newrelid, int parent_rti,
+		bool expandBranch)
+{
+	RangeTblEntry *childrte;
+	AppendRelInfo *appinfo;
+
+	childrte = copyObject(rte);
+
+	if (!expandBranch)
+	{
+		childrte->rtekind = RTE_RELATION;
+		childrte->inh = false;
+	}
+	else
+	{
+		Assert(branch);
+		Assert(child == branch);
+	}
+
+	childrte->relid  = relationObjectId; //originalOID;
+	if (child->partkey)
+		childrte->relkind = RELKIND_PARTITIONED_TABLE;
+	else
+		childrte->relkind = RELKIND_RELATION;
+
+	if(!childrte->alias)
+		childrte->alias = makeNode(Alias);
+	childrte->alias->aliasname = child->tablename;
+
+	/* FIXME maybe use a mapping array here instead of rte->values_lists*/
+	if (expandBranch)
+		childrte->values_lists = list_make1_oid(branch->oid); //partitionOID
+	else
+		childrte->values_lists = list_make1_oid(child->oid); //partitionOID
+
+	root->simple_rte_array[newrelid] = childrte;
+	HYPO_TAG_RTI(newrelid, root);
+
+	appinfo = makeNode(AppendRelInfo);
+
+	if (expandBranch || branch)
+		appinfo->parent_relid = parent_rti;
+	else
+		appinfo->parent_relid = rel->relid;
+
+	appinfo->child_relid = newrelid;
+	appinfo->parent_reltype = parentrel->rd_rel->reltype;
+	appinfo->child_reltype = parentrel->rd_rel->reltype;
+	make_inh_translation_list(parentrel, parentrel, newrelid,
+			&appinfo->translated_vars);
+	appinfo->parent_reloid = relationObjectId;
+	root->append_rel_list = lappend(root->append_rel_list,
+			appinfo);
+	root->parse->rtable = lappend(root->parse->rtable,
+			root->simple_rte_array[newrelid]);
 }
 
 /*
@@ -224,6 +416,9 @@ hypo_generate_partitiondesc(hypoTable *parent)
 
 	/* Get partition oids from pg_inherits */
 	inhoids = hypo_find_inheritance_children(parent);
+
+	if (!inhoids)
+		return NULL;
 
 	/* Collect bound spec nodes in a list */
 	i = 0;
@@ -1047,7 +1242,7 @@ hypo_generate_partition_key_exprs(hypoTable *entry, RelOptInfo *rel)
 static PartitionBoundSpec *
 hypo_get_boundspec(Oid tableid)
 {
-	hypoTable *entry = hypo_find_table(tableid);
+	hypoTable *entry = hypo_find_table(tableid, true);
 
 	if (entry)
 		return entry->boundspec;
@@ -1173,7 +1368,7 @@ hypo_get_partkeydef(hypoTable *entry)
 		elog(ERROR, "hypopg: hypothetical table %s is not partitioned",
 				quote_identifier(entry->tablename));
 
-	relid = hypo_table_find_root_oid(entry);
+	relid = entry->rootid;
 
 	partexpr_item = list_head(partkey->partexprs);
 	context = deparse_context_for(get_relation_name(relid), relid);
@@ -1263,6 +1458,7 @@ static hypoTable *
 hypo_newTable(Oid parentid)
 {
 	hypoTable	   *entry;
+	hypoTable	   *parent;
 	MemoryContext	oldcontext;
 
 	oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
@@ -1279,31 +1475,29 @@ hypo_newTable(Oid parentid)
 	 * If the given root table oid isn't present in hypoTables, we're
 	 * partitioning it, so keep its oid, otherwise generate a new oid
 	 */
-	entry->parentid = hypo_table_find_parent_oid(parentid);
+	parent= hypo_table_find_parent_oid(parentid);
 
-	if (entry->parentid != InvalidOid)
-		entry->oid = hypo_getNewOid(parentid);
+	if (parent)
+	{
+		entry->parentid = parent->oid;
+		entry->oid = hypo_getNewOid(parent->rootid);
+		entry->rootid = parent->rootid;
+	}
 	else
+	{
+		entry->parentid = InvalidOid;
 		entry->oid = parentid;
+		entry->rootid = parentid;
+	}
 
 	return entry;
-}
-
-/*
- * Find the direct parent oid of a hypothetical partition entry.  Return NULL
- * is it's a top level table.
- */
-static Oid
-hypo_table_find_parent_entry(hypoTable *entry)
-{
-	return hypo_table_find_parent_oid(entry->parentid);
 }
 
 /*
  * Find the direct parent oid of a hypothetical partition given it's parentid
  * field.  Return InvalidOid is it's a top level table.
  */
-static Oid
+static hypoTable *
 hypo_table_find_parent_oid(Oid parentid)
 {
 	ListCell *lc;
@@ -1313,31 +1507,10 @@ hypo_table_find_parent_oid(Oid parentid)
 		hypoTable *entry = (hypoTable *) lfirst(lc);
 
 		if (entry->oid == parentid)
-			return entry->oid;
+			return entry;
 	}
 
-	return InvalidOid;
-}
-
-/*
- * Find the root table identifier of an hypothetical table
- */
-static Oid
-hypo_table_find_root_oid(hypoTable *entry)
-{
-	Oid parent, last;
-	if (entry->parentid == InvalidOid)
-		return entry->oid;
-
-	parent = hypo_table_find_parent_entry(entry);
-
-	while (parent != InvalidOid)
-	{
-		last = parent;
-		parent = hypo_table_find_parent_entry(entry);
-	}
-
-	return last;
+	return NULL;
 }
 
 /*
@@ -1345,7 +1518,7 @@ hypo_table_find_root_oid(hypoTable *entry)
  * otherwise return NULL
  */
 hypoTable *
-hypo_find_table(Oid tableid)
+hypo_find_table(Oid tableid, bool missing_ok)
 {
 	ListCell *lc;
 
@@ -1359,14 +1532,18 @@ hypo_find_table(Oid tableid)
 		return entry;
 	}
 
+	if (!missing_ok)
+		elog(ERROR, "hypopg: could not find parent for %d", tableid);
+
 	return NULL;
 }
 
 /*
- * Is the given name an hypothetical partition ?
+ * Return the hypothetical oid if  the given name is an hypothetical partition,
+ * otherwise return InvalidOid
  */
-static bool
-hypo_table_name_is_hypothetical(const char *name)
+static hypoTable *
+hypo_table_name_get_entry(const char *name)
 {
 	ListCell   *lc;
 
@@ -1375,10 +1552,10 @@ hypo_table_name_is_hypothetical(const char *name)
 		hypoTable  *entry = (hypoTable *) lfirst(lc);
 
 		if (strcmp(entry->tablename, name) == 0)
-			return true;
+			return entry;
 	}
 
-	return false;
+	return NULL;
 }
 
 /*
@@ -1494,7 +1671,7 @@ hypo_table_reset(void)
  */
 static const hypoTable *
 hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
-		Oid parentid)
+		Oid parentid, Oid rootid)
 {
 	hypoTable	   *entry;
 	List		   *stmts;
@@ -1528,7 +1705,7 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 			if (defaultpart != InvalidOid)
 				elog(ERROR, "partition \"%s\" conflicts with existing default partition \"%s\"",
 					quote_identifier(node->relation->relname),
-					quote_identifier(hypo_find_table(defaultpart)->tablename));
+					quote_identifier(hypo_find_table(defaultpart, false)->tablename));
 		}
 	}
 
@@ -1539,7 +1716,7 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 
 	/* The CreateStmt specified a PARTITION BY clause, store it */
 	if (stmt->partspec)
-		hypo_generate_partkey(stmt, parentid, entry);
+		hypo_generate_partkey(stmt, rootid, entry);
 
 	if (boundspec)
 	{
@@ -1551,7 +1728,7 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 
 		oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
 		entry->boundspec = hypo_transformPartitionBound(pstate,
-				hypo_find_table(parentid), boundspec);
+				hypo_find_table(parentid, false), boundspec);
 		MemoryContextSwitchTo(oldcontext);
 	}
 
@@ -1628,12 +1805,12 @@ hypo_transformPartitionBound(ParseState *pstate, hypoTable *parent,
 
 		/* Get the only column's name in case we need to output an error */
 		if (key->partattrs[0] != 0)
-			colname = get_attname(parent->oid,
+			colname = get_attname(parent->rootid,
 								  key->partattrs[0], false);
 		else
 			colname = deparse_expression((Node *) linitial(partexprs),
 										 deparse_context_for(parent->tablename,
-															 parent->oid),
+															 parent->rootid),
 										 false, false);
 		/* Need its type data too */
 		coltype = get_partition_col_typid(key, 0);
@@ -1713,7 +1890,7 @@ hypo_transformPartitionBound(ParseState *pstate, hypoTable *parent,
 
 			/* Get the column's name in case we need to output an error */
 			if (key->partattrs[i] != 0)
-				colname = get_attname(parent->oid,
+				colname = get_attname(parent->rootid,
 									  key->partattrs[i], false);
 			else
 			{
@@ -1779,18 +1956,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 				    Oid relationObjectId,
 				    RelOptInfo *rel)
 {
-	hypoTable *parent;
-	List *inhoids;
-	int nparts;
-
-	Assert(HYPO_ENABLED());
 	Assert(hypo_table_oid_is_hypothetical(relationObjectId));
-
-	parent = hypo_find_table(relationObjectId);
-
-	/* get all of the partition oids */
-	inhoids = hypo_find_inheritance_children(parent);
-	nparts = list_length(inhoids);
 
 	/*
 	 * if this rel is parent, prepare some structures to inject
@@ -1798,93 +1964,11 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	 */
 	if(!HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
-		int i;
-		int oldsize = root->simple_rel_array_size;
-		RangeTblEntry *rte;
-		ListCell *cell;
-		AppendRelInfo *appinfo;
+		Relation parentrel;
 
-		/* resize and clean rte and rel arrays */
-		root->simple_rel_array_size = oldsize + nparts + 1;
-		root->simple_rel_array = (RelOptInfo **)
-			repalloc(root->simple_rel_array,
-					root->simple_rel_array_size *
-					sizeof(RelOptInfo *));
-		root->simple_rte_array = (RangeTblEntry **)
-			repalloc(root->simple_rte_array,
-					root->simple_rel_array_size *
-					sizeof(RangeTblEntry *));
-
-		for (i=oldsize; i<root->simple_rel_array_size; i++)
-		{
-			root->simple_rel_array[i] = NULL;
-			root->simple_rte_array[i] = NULL;
-		}
-
-		/* rewrite and restore this rel's rte */
-		rte = root->simple_rte_array[rel->relid];
-		rte->relkind = RELKIND_PARTITIONED_TABLE;
-		rte->inh = true;
-
-		root->simple_rte_array[rel->relid] = rte;
-		root->simple_rte_array[oldsize] = rte;
-
-		root->parse->rtable = lappend(root->parse->rtable,
-				root->simple_rte_array[oldsize]);
-
-		HYPO_TAG_RTI(rel->relid, root);
-		HYPO_TAG_RTI(oldsize, root);
-
-
-		/*
-		 * create RangeTblEntries and AppendRelInfos hypothetically
-		 * for all hypothetical partitions
-		 */
-		i = 1;
-		foreach(cell, inhoids)
-		{
-			int newrelid;
-			Oid childOid = lfirst_oid(cell);
-			hypoTable *child;
-			RangeTblEntry *childrte;
-			Relation parentrel;
-
-			child = hypo_find_table(childOid);
-			newrelid = oldsize + i;
-
-			childrte = copyObject(rte);
-			childrte->rtekind = RTE_RELATION;
-			childrte->relid  = relationObjectId; //originalOID;
-			childrte->relkind = RELKIND_RELATION;
-			childrte->inh = false;
-			if(!childrte->alias)
-				childrte->alias = makeNode(Alias);
-			childrte->alias->aliasname = child->tablename;
-			/* FIXME maybe use a mapping array here instead of rte->values_lists*/
-			childrte->values_lists = list_make1_oid(child->oid); //partitionOID
-			root->simple_rte_array[newrelid] = childrte;
-			HYPO_TAG_RTI(newrelid, root);
-
-			appinfo = makeNode(AppendRelInfo);
-			appinfo->parent_relid = rel->relid;
-			appinfo->child_relid = newrelid;
-			parentrel = heap_open(relationObjectId, NoLock);
-			appinfo->parent_reltype = parentrel->rd_rel->reltype;
-			appinfo->child_reltype = parentrel->rd_rel->reltype;
-			make_inh_translation_list(parentrel, parentrel, newrelid,
-					&appinfo->translated_vars);
-			heap_close(parentrel, NoLock);
-			appinfo->parent_reloid = relationObjectId;
-			root->append_rel_list = lappend(root->append_rel_list,
-					appinfo);
-			root->parse->rtable = lappend(root->parse->rtable,
-					root->simple_rte_array[newrelid]);
-
-			i++;
-		}
-
-		/* add partition info to this rel */
-		hypo_partition_table(root, rel, parent);
+		parentrel = heap_open(relationObjectId, AccessShareLock);
+		hypo_expand_partitioned_entry(root, relationObjectId, rel, parentrel, NULL, root->simple_rel_array_size, -1);
+		heap_close(parentrel, NoLock);
 	}
 
 	/*
@@ -1899,57 +1983,87 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	if (rel->reloptkind != RELOPT_BASEREL
 		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
-		if (parent->partkey->strategy == PARTITION_STRATEGY_HASH)
+		Oid partoid;
+		hypoTable *part;
+		RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
+		Selectivity selectivity;
+		double pages;
+
+		Assert(rte->values_lists);
+		partoid = linitial_oid(rte->values_lists);
+		part = hypo_find_table(partoid, false);
+
+		/*
+		 * there's no need to estimate branch partitions pages and tuples, but
+		 * we have to setup their partitioning data
+		 */
+		if (part->partkey)
 		{
-			double pages;
-
-			pages = ceil(rel->pages / nparts);
-			rel->pages = (BlockNumber) pages;
-			rel->tuples = clamp_row_est(rel->tuples / nparts);
+			hypo_set_relation_partition_info(root, rel, part);
+			return;
 		}
-		else
-		{
-			Selectivity selectivity;
-			double pages;
 
-			selectivity = hypo_clauselist_selectivity(root, rel, NIL,
-					parent->oid);
+		/*
+		 * hypo_clauselist_selectivity will retrieve the constraints for this
+		 * partition and all its ancestors
+		 */
+		selectivity = hypo_clauselist_selectivity(root, rel, NIL,
+				part->rootid, part->parentid);
 
-			elog(DEBUG1, "hypopg: selectivity for partition \"%s\": %lf",
-					hypo_find_table(linitial_oid(planner_rt_fetch(rel->relid,
-								root)->values_lists))->tablename,
-					selectivity);
+		elog(DEBUG1, "hypopg: selectivity for partition \"%s\": %lf",
+				hypo_find_table(linitial_oid(planner_rt_fetch(rel->relid,
+							root)->values_lists), false)->tablename,
+				selectivity);
 
-			pages = ceil(rel->pages * selectivity);
-			rel->pages = (BlockNumber) pages;
-			rel->tuples = clamp_row_est(rel->tuples * selectivity);
-		}
+		pages = ceil(rel->pages * selectivity);
+		rel->pages = (BlockNumber) pages;
+		rel->tuples = clamp_row_est(rel->tuples * selectivity);
 	}
 }
 
 
 /*
- * If this is the table we want to hypothetically partition, modifies its
- * metadata to add partitioning information
+ * Set partitioning scheme and relation information for a hypothetically
+ * partitioned table.
+ *
+ * Heavily inspired on set_relation_partition_info
  */
 static void
-hypo_partition_table(PlannerInfo *root, RelOptInfo *rel, hypoTable *entry)
+hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
+		hypoTable *entry)
 {
 	PartitionDesc partdesc;
 	PartitionKey partkey;
 
+	Assert(planner_rt_fetch(rel->relid, root)->relkind ==
+			RELKIND_PARTITIONED_TABLE);
+
 	partdesc = hypo_generate_partitiondesc(entry);
+
+	if (!partdesc)
+		return;
+
 	partkey = entry->partkey;
 	rel->part_scheme = hypo_find_partition_scheme(root, partkey);
+	Assert(partdesc != NULL && rel->part_scheme != NULL);
 	rel->boundinfo = partition_bounds_copy(partdesc->boundinfo, partkey);
 	rel->nparts = partdesc->nparts;
 	hypo_generate_partition_key_exprs(entry, rel);
-	rel->partition_qual = NIL; //FIX ME for multi-level partition
+
+	/* Add the partition_qual if it's not the root partition */
+	if (OidIsValid(entry->parentid))
+	{
+		hypoTable *parent = hypo_find_table(entry->parentid, false);
+		rel->partition_qual = hypo_get_partition_constraints(root, rel, parent);
+	}
 }
 
 
 /*
- * Returns a List of partition constraints from its partition bound spec
+ * Given a rel corresponding to a hypothetically partitioned table, returns a
+ * List of partition constraints for this partition, including all its
+ * ancestors if any.  The main processing is done in
+ * hypo_get_partition_quals_inh.
  *
  * It is inspired on get_relation_constraints()
  */
@@ -1959,17 +2073,17 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *pa
 	ListCell *lc;
 	Oid childOid;
 	hypoTable *child;
-	PartitionBoundSpec *spec;
 	List *constraints;
 
 	/* FIXME maybe use a mapping array here instead of rte->values_lists*/
 	lc = list_head(planner_rt_fetch(rel->relid, root)->values_lists);
 	childOid = lfirst_oid(lc);
-	child = hypo_find_table(childOid);
-	spec = child->boundspec;
+	child = hypo_find_table(childOid, false);
+
+	Assert(child->parentid == parent->oid);
 
 	/* get its partition constraints */
-	constraints = hypo_get_qual_from_partbound(parent,spec);
+	constraints = hypo_get_partition_quals_inh(child, parent);
 
 	if (constraints)
 	{
@@ -1984,8 +2098,40 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *pa
 		/* Fix Vars to have the desired varno */
 		if (rel->relid != 1)
 			ChangeVarNodes((Node *) constraints, 1, rel->relid, 0);
-
 	}
+
+	return constraints;
+}
+
+/*
+ * Return the partition constraints belonging to the given partition and all
+ * of its ancestor.  The parent parameter is optional.
+ */
+List *
+hypo_get_partition_quals_inh(hypoTable *part, hypoTable *parent)
+{
+	PartitionBoundSpec *spec;
+	List *constraints = NIL;
+
+	Assert(OidIsValid(part->parentid));
+
+	if (parent == NULL)
+		parent = hypo_find_table(part->parentid, false);
+
+	spec = part->boundspec;
+
+	constraints = hypo_get_qual_from_partbound(parent, spec);
+
+	/* Append parent's constraint if any */
+	if (OidIsValid(parent->parentid))
+	{
+		List *parent_constraints;
+
+		parent_constraints = hypo_get_partition_quals_inh(parent, NULL);
+
+		constraints = list_concat(parent_constraints, constraints);
+	}
+
 	return constraints;
 }
 
@@ -1996,7 +2142,7 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *pa
  *
  * Heavily inspired on get_qual_from_partbound
  */
-List *
+static List *
 hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec)
 {
 	PartitionKey key = parent->partkey;
@@ -2655,8 +2801,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 #else
 	const char *partname = PG_GETARG_NAME(0)->data;
 	char	   *partitionof = TextDatumGetCString(PG_GETARG_TEXT_PP(1));
+	char	   *partition_by = NULL;
 	StringInfoData	sql;
-	Oid			parentid;
+	Oid			parentid, rootid;
 	const hypoTable  *entry;
 	List	   *parsetree_list;
 	RawStmt	   *raw_stmt;
@@ -2668,11 +2815,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	int			i = 0;
 
 	if (!PG_ARGISNULL(2))
-	{
-		elog(ERROR, "hypopg: multi-level partitioning is not supported yet");
-	}
+		partition_by = TextDatumGetCString(PG_GETARG_TEXT_PP(2));
 
-	if (hypo_table_name_is_hypothetical(partname))
+	if (hypo_table_name_get_entry(partname) != NULL)
 		elog(ERROR, "hypopg: hypothetical table %s already exists",
 				quote_identifier(partname));
 
@@ -2693,6 +2838,10 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	appendStringInfo(&sql, "CREATE TABLE %s %s",
 			quote_identifier(partname), partitionof);
 
+	if (partition_by)
+		appendStringInfo(&sql, " %s",
+			partition_by);
+
 	parsetree_list = pg_parse_query(sql.data);
 	raw_stmt = (RawStmt *) linitial(parsetree_list);
 	stmt = (CreateStmt *) raw_stmt->stmt;
@@ -2701,24 +2850,47 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	if (!stmt->partbound || !stmt->inhRelations)
 		elog(ERROR, "hypopg: you must specify a PARTITION OF clause");
 
-	if (stmt->partspec)
-		elog(ERROR, "hypopg: multi-level partitioning is not supported yet");
-
 	/* Find the parent's oid */
 	if (list_length(stmt->inhRelations) != 1)
-		elog(ERROR, "hypopg: unexpected list lenght %d, expected 1",
+		elog(ERROR, "hypopg: unexpected list length %d, expected 1",
 				list_length(stmt->inhRelations));
 
 	rv = (RangeVar *) linitial(stmt->inhRelations);
-	/* FIXME change this when handling multi-level partitioning */
-	parentid = RangeVarGetRelid(rv, AccessShareLock, false);
+	parentid = RangeVarGetRelid(rv, AccessShareLock, true);
 
-	if (!hypo_table_oid_is_hypothetical(parentid))
+	if (OidIsValid(parentid) && !hypo_table_oid_is_hypothetical(parentid))
 		elog(ERROR, "hypopg: %s must be hypothetically partitioned first",
 				quote_identifier(rv->relname));
 
+	/* Look for a hypothetical parent if we didn't find a real table */
+	if (!OidIsValid(parentid))
+	{
+		hypoTable *parent;
+
+		parent = hypo_table_name_get_entry(rv->relname);
+
+		if (parent == NULL)
+			elog(ERROR, "hypopg: %s does not exists",
+					quote_identifier(rv->relname));
+
+		if(rv->schemaname)
+			elog(ERROR, "hypopg: cannot use qualified name with hypothetical"
+					" partition");
+
+		parentid = parent->oid;
+		rootid = parent->rootid;
+	}
+	else
+	{
+		/*
+		 * if we found a real table, there's no subpartitioning, so the root
+		 * and the parent are the same
+		 */
+		rootid = parentid;
+	}
+
 	entry = hypo_table_store_parsetree((CreateStmt *) stmt, sql.data,
-			parentid);
+			parentid, rootid);
 
 	pfree(sql.data);
 
@@ -2816,7 +2988,7 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	Assert(IsA(raw_stmt->stmt, CreateStmt));
 
 	entry = hypo_table_store_parsetree((CreateStmt *) raw_stmt->stmt, sql.data,
-			tableid);
+			tableid, tableid);
 
 	/* special case for root table, copy it's original name */
 	strncpy(entry->tablename, root_name, NAMEDATALEN);
@@ -2900,6 +3072,8 @@ HYPO_PARTITION_NOT_SUPPORTED();
 			nulls[i++] = true;
 		else
 			values[i++] = ObjectIdGetDatum(entry->parentid);
+
+		values[i++] = ObjectIdGetDatum(entry->rootid);
 
 		if (entry->partkey)
 			values[i++] = CStringGetTextDatum(hypo_get_partkeydef(entry));

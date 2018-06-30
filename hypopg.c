@@ -344,8 +344,8 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 			}
 		}
 
-		/* Close the relation release the lock now */
-		heap_close(relation, AccessShareLock);
+		/* Close the relation and keep the lock, it might be reopened later */
+		heap_close(relation, NoLock);
 
 #if PG_VERSION_NUM >= 100000
 		if(hypo_table_oid_is_hypothetical(relationObjectId))

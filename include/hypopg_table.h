@@ -18,7 +18,7 @@
 #if PG_VERSION_NUM >= 100000
 #define HYPO_PARTITION_NOT_SUPPORTED
 
-#define HYPO_TABLE_NB_COLS		5	/* # of column hypopg_table() returns */
+#define HYPO_TABLE_NB_COLS		6	/* # of column hypopg_table() returns */
 #define HYPO_ADD_PART_COLS	2	/* # of column hypopg_add_partition() returns */
 
 #include "optimizer/paths.h"
@@ -34,6 +34,8 @@ typedef struct hypoTable
 {
 	Oid			oid;			/* hypothetical table unique identifier */
 	Oid			parentid;		/* In case of partition, it's direct parent,
+								   otherwise InvalidOid */
+	Oid			rootid;			/* In case of partition, it's root parent,
 								   otherwise InvalidOid */
 	char	   *tablename;		/* hypothetical partition name, or original
 								   table name for root parititon */
@@ -65,10 +67,10 @@ Datum		hypopg_partition_table(PG_FUNCTION_ARGS);
 Datum		hypopg_reset_table(PG_FUNCTION_ARGS);
 
 #if PG_VERSION_NUM >= 100000
-hypoTable *hypo_find_table(Oid tableid);
+hypoTable *hypo_find_table(Oid tableid, bool missing_ok);
 List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
 					    hypoTable *parent);
-List *hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec);
+List *hypo_get_partition_quals_inh(hypoTable *part, hypoTable *parent);
 bool hypo_table_oid_is_hypothetical(Oid relid);
 void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 					 Oid relationObjectId,

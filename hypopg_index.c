@@ -1582,7 +1582,7 @@ hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel)
 		Selectivity selectivity;
 
 		selectivity = hypo_clauselist_selectivity(NULL, rel, entry->indpred,
-				entry->relid);
+				entry->relid, InvalidOid);
 
 		elog(DEBUG1, "hypopg: selectivity for index \"%s\": %lf",
 				entry->indexname, selectivity);

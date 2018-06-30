@@ -93,8 +93,8 @@ CREATE FUNCTION hypopg_reset_table()
 AS '$libdir/hypopg', 'hypopg_reset_table';
 
 CREATE FUNCTION hypopg_table(OUT relid oid, OUT tablename text,
-    OUT parentid oid,
-    OUT partition_by_clause text, OUT partition_of_clause text)
+    OUT parentid oid, OUT rootid oid,
+    OUT partition_by_clause text, OUT partition_bounds text)
     RETURNS SETOF record
     LANGUAGE c COST 100
 AS '$libdir/hypopg', 'hypopg_table';

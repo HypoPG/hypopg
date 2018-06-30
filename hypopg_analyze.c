@@ -63,7 +63,9 @@ PG_FUNCTION_INFO_V1(hypopg_statistic);
 
 #if PG_VERSION_NUM >= 100000
 static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
-		hypoTable *entry, float4 fraction, hypoTable *root_entry);
+		hypoTable *entry, float4 fraction);
+static void hypo_do_analyze_tree(Relation onerel, Relation pgstats,
+		float4 fraction, hypoTable *parent);
 static uint32 hypo_hash_fn(const void *key, Size keysize);
 static void hypo_update_attstats(hypoTable *part, int natts,
 		VacAttrStats **vacattrstats, Relation pgstats);
@@ -77,7 +79,7 @@ static void hypo_update_attstats(hypoTable *part, int natts,
  */
 Selectivity
 hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
-		Oid table_relid)
+		Oid table_relid, Oid parent_oid)
 {
 	Selectivity selectivity;
 	PlannerInfo *root_dummy;
@@ -120,9 +122,10 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 	/* Are we estimating selectivity for hypothetical partitioning? */
 	if (clauses == NIL)
 	{
-		hypoTable *parent = hypo_find_table(table_relid);
+		hypoTable *part = hypo_find_table(parent_oid, false);
 
 		Assert(root != NULL);
+		Assert(part->partkey);
 
 		/* add the hypothetical partition oid to be able to get the
 		 * constraints */
@@ -130,7 +133,7 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 		root_dummy->parse->rtable = list_make1(rte);
 
 		/* get the partition constraints, setup for a rel with relid 1 */
-		clauses = hypo_get_partition_constraints(root_dummy, rel, parent);
+		clauses = hypo_get_partition_constraints(root_dummy, rel, part);
 
 		/*
 		 * and remove the hypothetical oid to avoid computing selectivity with
@@ -172,7 +175,7 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
  * before and after this function.
  */
 static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
-		hypoTable *part, float4 fraction, hypoTable *root_entry)
+		hypoTable *part, float4 fraction)
 {
 	int			attr_cnt,
 				tcnt,
@@ -184,7 +187,7 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
-	Oid			root_tableid = root_entry->oid;
+	Oid			root_tableid = part->rootid;
 	List	   *context = deparse_context_for(get_rel_name(root_tableid),
 			root_tableid);
 	StringInfoData buf;
@@ -237,7 +240,7 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 	/*
 	 * Acquire the sample rows
 	 */
-	constraints = hypo_get_qual_from_partbound(root_entry, part->boundspec);
+	constraints = hypo_get_partition_quals_inh(part, NULL);
 	constraints = (List *) make_ands_explicit(constraints);
 	str = deparse_expression((Node *) constraints, context, false, false);
 
@@ -341,6 +344,28 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 	MemoryContextSwitchTo(caller_context);
 	MemoryContextDelete(anl_context);
 	anl_context = NULL;
+}
+
+static void hypo_do_analyze_tree(Relation onerel, Relation pgstats,
+		float4 fraction, hypoTable *parent)
+{
+	ListCell *lc;
+
+	Assert(hypoTables);
+
+	foreach(lc, hypoTables)
+	{
+		hypoTable *part = (hypoTable *) lfirst(lc);
+
+		if (!OidIsValid(part->parentid))
+			continue;
+
+		if (part->parentid != parent->oid)
+			continue;
+
+		hypo_do_analyze_partition(onerel, pgstats, part, fraction);
+		hypo_do_analyze_tree(onerel, pgstats, fraction, part);
+	}
 }
 
 static uint32 hypo_hash_fn(const void *key, Size keysize)
@@ -505,10 +530,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 #else
 	Oid				root_tableid = PG_GETARG_OID(0);
 	float4			fraction = PG_GETARG_FLOAT4(1);
-	hypoTable	   *root_entry = hypo_find_table(root_tableid);
+	hypoTable	   *root_entry = hypo_find_table(root_tableid, true);
 	Relation		onerel;
 	Relation		pgstats;
-	ListCell	   *lc;
 	int				ret;
 
 	if (!root_entry)
@@ -541,15 +565,7 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	onerel = heap_open(root_tableid, AccessShareLock);
 	pgstats = heap_open(StatisticRelationId, AccessShareLock);
 
-	foreach(lc, hypoTables)
-	{
-		hypoTable *part = (hypoTable *) lfirst(lc);
-
-		if (part->parentid != root_tableid)
-			continue;
-
-		hypo_do_analyze_partition(onerel, pgstats, part, fraction, root_entry);
-	}
+	hypo_do_analyze_tree(onerel, pgstats, fraction, root_entry);
 
 	/* release SPI related resources (and return to caller's context) */
 	SPI_finish();

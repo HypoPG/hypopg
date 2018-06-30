@@ -40,7 +40,7 @@ extern HTAB *hypoStatsHash;
 #endif			/* PG_VERSION_NUM >= 100000 */
 
 Selectivity hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel,
-		List *clauses, Oid table_relid);
+		List *clauses, Oid table_relid, Oid parent_oid);
 
 /*--- Functions --- */
 
