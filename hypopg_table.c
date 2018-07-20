@@ -2019,6 +2019,21 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		rel->pages = (BlockNumber) pages;
 		rel->tuples = clamp_row_est(rel->tuples * selectivity);
 	}
+
+	/*
+	 * This is done in query_planner just before add_base_rels_to_query() is
+	 * called, so before get_relation_info_hook is called and setup
+	 * root->append_rel_list
+	 *
+	 * FIXME find a way to call it once per planning and not one per
+	 * get_relation_info_hook call.
+	 */
+	if (root->append_rel_array)
+	{
+		pfree(root->append_rel_array);
+		root->append_rel_array = NULL;
+	}
+	setup_append_rel_array(root);
 }
 
 
