@@ -1,7 +1,10 @@
 EXTENSION = hypopg
 EXTVERSION   = $(shell grep default_version $(EXTENSION).control | sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 TESTS        = $(wildcard test/sql/*.sql)
-REGRESS      = $(patsubst test/sql/%.sql,%,$(TESTS))
+REGRESS      = hypo_setup \
+	       hypo_index \
+	       hypo_table
+
 REGRESS_OPTS = --inputdir=test
 
 PG_CONFIG ?= pg_config
