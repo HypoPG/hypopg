@@ -1314,3 +1314,82 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = 42;
          Filter: (id = 42)
 (3 rows)
 
+-- no UPDATE/DELETE test
+-- =====================
+-- simple UPDATE and DELETE on hypothetically partitioned table
+EXPLAIN (COSTS OFF) UPDATE hypo_part_range set id = id;
+ERROR:  hypopg: UPDATE and DELETE on hypothetical partitioned tables are not supported
+EXPLAIN DELETE FROM hypo_part_range WHERE id = 42;
+ERROR:  hypopg: UPDATE and DELETE on hypothetical partitioned tables are not supported
+-- UPDATE and DELETE on hypothetically partitioned table inside CTE
+EXPLAIN (COSTS OFF) WITH s AS (UPDATE hypo_part_range set id = id returning *) SELECT 1;
+ERROR:  hypopg: UPDATE and DELETE on hypothetical partitioned tables are not supported
+EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM hypo_part_range WHERE id = 42 returning *) SELECT 1;
+ERROR:  hypopg: UPDATE and DELETE on hypothetical partitioned tables are not supported
+-- UPDATE and DELETE involving hypothetically partitioned table, but on regular
+-- tables
+CREATE TABLE foo(id integer);
+-- UPDATE on non hypothetically partitioned table but having a hypothetically
+-- partitioned table joined
+EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from hypo_part_range WHERE foo.id = hypo_part_range.id AND hypo_part_range.id > 25000 RETURNING *) SELECT 1;
+                                       QUERY PLAN                                        
+-----------------------------------------------------------------------------------------
+ Result
+   CTE s
+     ->  Update on foo
+           ->  Hash Join
+                 Hash Cond: (foo.id = hypo_part_range_20000_30000.id)
+                 ->  Seq Scan on foo
+                 ->  Hash
+                       ->  Append
+                             ->  Seq Scan on hypo_part_range hypo_part_range_20000_30000
+                                   Filter: (id > 25000)
+(10 rows)
+
+-- same but with real table
+EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from part_range WHERE foo.id = part_range.id AND part_range.id > 25000 RETURNING *) SELECT 1;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Result
+   CTE s
+     ->  Update on foo
+           ->  Hash Join
+                 Hash Cond: (foo.id = part_range_20000_30000.id)
+                 ->  Seq Scan on foo
+                 ->  Hash
+                       ->  Append
+                             ->  Seq Scan on part_range_20000_30000
+                                   Filter: (id > 25000)
+(10 rows)
+
+-- DELETE on non hypothetically partitioned table but having a hypothetically
+-- partitioned table joined
+EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING hypo_part_range WHERE foo.id = hypo_part_range.id AND hypo_part_range.id = 42 RETURNING *) SELECT 1;
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Result
+   CTE s
+     ->  Delete on foo
+           ->  Nested Loop
+                 ->  Append
+                       ->  Seq Scan on hypo_part_range hypo_part_range_1_10000
+                             Filter: (id = 42)
+                 ->  Seq Scan on foo
+                       Filter: (id = 42)
+(9 rows)
+
+-- same but with real table
+EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING part_range WHERE foo.id = part_range.id AND part_range.id = 42 RETURNING *) SELECT 1;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Result
+   CTE s
+     ->  Delete on foo
+           ->  Nested Loop
+                 ->  Append
+                       ->  Seq Scan on part_range_1_10000
+                             Filter: (id = 42)
+                 ->  Seq Scan on foo
+                       Filter: (id = 42)
+(9 rows)
+

@@ -240,3 +240,25 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_range_10000_20000', 'PARTI
 SELECT tablename FROM hypopg_add_partition('hypo_part_range_20000_30000', 'PARTITION OF hypo_part_range FOR VALUES FROM (20000) TO (30000)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = 42;
+
+-- no UPDATE/DELETE test
+-- =====================
+-- simple UPDATE and DELETE on hypothetically partitioned table
+EXPLAIN (COSTS OFF) UPDATE hypo_part_range set id = id;
+EXPLAIN DELETE FROM hypo_part_range WHERE id = 42;
+-- UPDATE and DELETE on hypothetically partitioned table inside CTE
+EXPLAIN (COSTS OFF) WITH s AS (UPDATE hypo_part_range set id = id returning *) SELECT 1;
+EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM hypo_part_range WHERE id = 42 returning *) SELECT 1;
+-- UPDATE and DELETE involving hypothetically partitioned table, but on regular
+-- tables
+CREATE TABLE foo(id integer);
+-- UPDATE on non hypothetically partitioned table but having a hypothetically
+-- partitioned table joined
+EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from hypo_part_range WHERE foo.id = hypo_part_range.id AND hypo_part_range.id > 25000 RETURNING *) SELECT 1;
+-- same but with real table
+EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from part_range WHERE foo.id = part_range.id AND part_range.id > 25000 RETURNING *) SELECT 1;
+-- DELETE on non hypothetically partitioned table but having a hypothetically
+-- partitioned table joined
+EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING hypo_part_range WHERE foo.id = hypo_part_range.id AND hypo_part_range.id = 42 RETURNING *) SELECT 1;
+-- same but with real table
+EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING part_range WHERE foo.id = part_range.id AND part_range.id = 42 RETURNING *) SELECT 1;

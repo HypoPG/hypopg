@@ -26,6 +26,7 @@
 #endif
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
+#include "parser/parsetree.h"
 #include "utils/selfuncs.h"
 #include "utils/syscache.h"
 
@@ -39,6 +40,11 @@ PG_MODULE_MAGIC;
 
 /*--- Macros ---*/
 #define HYPO_ENABLED() (isExplain && hypo_is_enabled)
+
+typedef struct hypoWalkerContext
+{
+	bool explain_found;
+} hypoWalkerContext;
 
 /*--- Variables exported ---*/
 
@@ -99,7 +105,7 @@ static bool hypo_get_relation_stats_hook(PlannerInfo *root,
 		VariableStatData *vardata);
 static get_relation_stats_hook_type prev_get_relation_stats_hook = NULL;
 
-static bool hypo_query_walker(Node *node);
+static bool hypo_query_walker(Node *node, hypoWalkerContext *context);
 static void hypo_CacheRelCallback(Datum arg, Oid relid);
 
 void
@@ -218,14 +224,17 @@ hypo_utility_hook(
 				  DestReceiver *dest,
 				  char *completionTag)
 {
-	isExplain = query_or_expression_tree_walker(
+	hypoWalkerContext hypo_context = { 0 };
+
+	hypo_query_walker(
 #if PG_VERSION_NUM >= 100000
 						    (Node *) pstmt,
 #else
 						    parsetree,
 #endif
-						    hypo_query_walker,
-						    NULL, 0);
+						    &hypo_context);
+
+	isExplain = hypo_context.explain_found;
 
 	/*
 	 * Process pending invalidation.  For now, just do it if the current query
@@ -279,36 +288,88 @@ hypo_utility_hook(
  * i.e. an EXPLAIN, no ANALYZE
  */
 static bool
-hypo_query_walker(Node *parsetree)
+hypo_query_walker(Node *node, hypoWalkerContext *context)
 {
-	if (parsetree == NULL)
+	if (node == NULL)
 		return false;
 
-#if PG_VERSION_NUM >= 100000
-	parsetree = ((PlannedStmt *) parsetree)->utilityStmt;
-	if (parsetree == NULL)
-		return false;
-#endif
-	switch (nodeTag(parsetree))
+	switch (nodeTag(node))
 	{
+		case T_PlannedStmt:
+			{
+				Node *stmt = ((PlannedStmt *) node)->utilityStmt;
+				return query_or_expression_tree_walker(stmt, hypo_query_walker,
+						context, QTW_IGNORE_RANGE_TABLE);
+			}
 		case T_ExplainStmt:
 			{
+				ExplainStmt *stmt = (ExplainStmt *) node;
 				ListCell   *lc;
 
-				foreach(lc, ((ExplainStmt *) parsetree)->options)
+				foreach(lc, stmt->options)
 				{
 					DefElem    *opt = (DefElem *) lfirst(lc);
 
 					if (strcmp(opt->defname, "analyze") == 0)
 						return false;
 				}
+
+				context->explain_found = true;
+#if PG_VERSION_NUM >= 100000
+				/*
+				 * No point in looking for unhandled command type if there are
+				 * no hypothetical partitions
+				 */
+				if (!hypoTables)
+					return true;
+
+				return hypo_query_walker(stmt->query, context);
+#else
+				return true;
+#endif
 			}
-			return true;
 			break;
+#if PG_VERSION_NUM >= 100000
+		case T_Query:
+			{
+				Query *query = (Query *) node;
+
+				Assert(context->explain_found);
+
+				if (context->explain_found &&
+						(query->commandType == CMD_UPDATE ||
+						 query->commandType == CMD_DELETE)
+				)
+				{
+					RangeTblEntry *rte = rt_fetch(query->resultRelation,
+							query->rtable);
+
+					if (hypo_table_oid_is_hypothetical(rte->relid))
+						elog(ERROR, "hypopg: UPDATE and DELETE on hypothetically"
+								" partitioned tables are not supported");
+				}
+
+				if (query->cteList)
+				{
+					ListCell *lc;
+
+					foreach(lc, query->cteList)
+					{
+						CommonTableExpr *cte = (CommonTableExpr *) lfirst(lc);
+						hypo_query_walker(cte->ctequery, context);
+					}
+				}
+				return query_or_expression_tree_walker(node, hypo_query_walker,
+						context, QTW_IGNORE_RANGE_TABLE);
+			}
+			break;
+#endif
 		default:
 			return false;
 	}
-	return false;
+
+	return query_or_expression_tree_walker(node, hypo_query_walker, context,
+			QTW_IGNORE_RANGE_TABLE);
 }
 
 /*
