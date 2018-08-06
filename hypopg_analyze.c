@@ -34,6 +34,7 @@
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "parser/parsetree.h"
+#include "rewrite/rewriteManip.h"
 #include "utils/attoptcache.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -87,7 +88,7 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 	Query	   *parse;
 	List	   *rtable = NIL;
 	RangeTblEntry *rte;
-	int save_relid;
+	int         save_relid;
 
 	/* create a fake minimal PlannerInfo */
 	root_dummy = makeNode(PlannerInfo);
@@ -141,6 +142,16 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 		 */
 		rte->values_lists = NIL;
 		root_dummy->parse->rtable = list_make1(rte);
+	}
+	else
+	{	/* We estimates selectivity for hypothetical indexes */
+		RangeTblEntry *rt = planner_rt_fetch(save_relid, root);
+
+		/* modify RangeTableEntry to be able to get correct oid */
+		if (rt->values_lists)  /* Is this a hypothetical partition? */
+			planner_rt_fetch(1, root_dummy)->values_lists = rt->values_lists;
+		else
+			planner_rt_fetch(1, root_dummy)->relid = rt->relid;
 	}
 #else
 	Assert(clauses != NIL);

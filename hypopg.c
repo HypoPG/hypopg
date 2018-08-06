@@ -313,51 +313,82 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 			    bool inhparent,
 			    RelOptInfo *rel)
 {
+	bool  hypopart = false;
+	Relation	relation;
+
 	if (HYPO_ENABLED())
 	{
-		Relation	relation;
+
+#if PG_VERSION_NUM >= 100000
+		hypopart = hypo_table_oid_is_hypothetical(relationObjectId);
+		/*
+		 * If this relation is table we want to partition hypothetical,
+		 * inject hypothetical partitioning
+		 */
+		if (hypopart)
+			hypo_injectHypotheticalPartitioning(root, relationObjectId, rel);
+#endif
 
 		/* Open the current relation */
 		relation = heap_open(relationObjectId, AccessShareLock);
 
 		if (relation->rd_rel->relkind == RELKIND_RELATION
 #if PG_VERSION_NUM >= 90300
-				|| relation->rd_rel->relkind == RELKIND_MATVIEW
+			|| relation->rd_rel->relkind == RELKIND_MATVIEW
 #endif
-				)
+			)
 		{
-			ListCell   *lc;
+			ListCell  *lc;
+			Oid  parentId = relationObjectId;
 
+#if PG_VERSION_NUM >= 100000
+			/*
+			 * If this rel is a partition, get root table oid to look for
+			 * hypothetical indexes.
+			 */
+			if (rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
+			{
+				if (!hypopart)
+				{
+					/*
+					 * when this is a real partition, we have to search root
+					 * table from PlannerInfo to get root table oid.  when this
+					 * is a hypothetical partition, root table oid is equal to
+					 * relationObjectId, so nothing to do
+					 */
+
+					AppendRelInfo *appinfo;
+					RelOptInfo *parentrel = rel;
+					do
+					{
+						appinfo = root->append_rel_array[parentrel->relid];
+						parentrel = find_base_rel(root, appinfo->parent_relid);
+					} while (parentrel->reloptkind == RELOPT_OTHER_MEMBER_REL);
+					parentId = appinfo->parent_reloid;
+				}
+			}
+#endif
 			foreach(lc, hypoIndexes)
 			{
 				hypoIndex  *entry = (hypoIndex *) lfirst(lc);
 
-				if (entry->relid == relationObjectId)
+				if (entry->relid == parentId
+#if PG_VERSION_NUM >= 100000
+					&& !rel->part_scheme
+#endif
+					)
 				{
 					/*
 					 * hypothetical index found, add it to the relation's
 					 * indextlist
 					 */
-				  hypo_injectHypotheticalIndex(root, relationObjectId,
-							       inhparent, rel, relation, entry);
+					hypo_injectHypotheticalIndex(root, parentId,
+												 inhparent, rel, relation, entry);
 				}
 			}
 		}
-
 		/* Close the relation and keep the lock, it might be reopened later */
 		heap_close(relation, NoLock);
-
-#if PG_VERSION_NUM >= 100000
-		if(hypo_table_oid_is_hypothetical(relationObjectId))
-		{
-		  /*
-		   * this relation is table we want to partition hypothetical,
-		   * inject hypothetical partitioning
-		   */
-		  hypo_injectHypotheticalPartitioning(root, relationObjectId, rel);
-		}
-#endif
-
 	}
 	if (prev_get_relation_info_hook)
 		prev_get_relation_info_hook(root, relationObjectId, inhparent, rel);
