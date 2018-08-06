@@ -37,6 +37,9 @@
 #include "rewrite/rewriteManip.h"
 #include "utils/attoptcache.h"
 #include "utils/builtins.h"
+#if PG_VERSION_NUM >= 120000
+#include "utils/float.h"
+#endif
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #if PG_VERSION_NUM >= 100000
