@@ -315,6 +315,24 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_q4', 'PARTITION OF
 -- Maintenance
 -- -----------
 VACUUM ANALYZE;
+SELECT * FROM hypopg_analyze('hypo_part_range',100);
+ hypopg_analyze 
+----------------
+ 
+(1 row)
+
+SELECT * FROM hypopg_analyze('hypo_part_list',100);
+ hypopg_analyze 
+----------------
+ 
+(1 row)
+
+SELECT * FROM hypopg_analyze('hypo_part_multi',100);
+ hypopg_analyze 
+----------------
+ 
+(1 row)
+
 -- Test deparsing
 -- ==============
 SELECT relid = rootid AS is_root, tablename, parentid IS NULL parentid_is_null,
@@ -368,7 +386,7 @@ FROM hypopg_table();
 -- --------------
 -- Real tables
 -- -----------
--- 1. Range partition
+-- 1. Range partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM part_range;
                 QUERY PLAN                
 ------------------------------------------
@@ -546,8 +564,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi WHERE dt >= '2015-01-05' AND dt < '
 (7 rows)
 
 -- Hypothetical tables
--- ------------------"
--- 1. Range partition
+-- -------------------
+-- 1. Range partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range;
                           QUERY PLAN                           
 ---------------------------------------------------------------
@@ -723,4 +741,508 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi WHERE dt >= '2015-01-05' AND d
    ->  Seq Scan on hypo_part_multi hypo_part_multi_3_q1
          Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
 (7 rows)
+
+-- Join queries
+-- ------------
+-- Simple joins
+-- ------------
+-- 1. Real tables
+EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Hash Join
+   Hash Cond: (t2.id = t1.id)
+   ->  Append
+         ->  Seq Scan on part_range_1_10000 t2
+         ->  Seq Scan on part_range_10000_20000 t2_1
+         ->  Seq Scan on part_range_20000_30000 t2_2
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on part_range_1_10000 t1
+                     Filter: (id < 15000)
+               ->  Seq Scan on part_range_10000_20000 t1_1
+                     Filter: (id < 15000)
+(12 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_list t1, part_list t2 WHERE t1.id_key = t2.id_key and t1.id_key < 5;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Hash Join
+   Hash Cond: (t2.id_key = t1.id_key)
+   ->  Append
+         ->  Seq Scan on part_list_1_2_3 t2
+         ->  Seq Scan on part_list_4_5_6_8_10 t2_1
+         ->  Seq Scan on part_list_7_9 t2_2
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on part_list_1_2_3 t1
+                     Filter: (id_key < 5)
+               ->  Seq Scan on part_list_4_5_6_8_10 t1_1
+                     Filter: (id_key < 5)
+(12 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, part_hash t2 WHERE t1.id = t2.id;
+                   QUERY PLAN                   
+------------------------------------------------
+ Hash Join
+   Hash Cond: (t1.id = t2.id)
+   ->  Append
+         ->  Seq Scan on part_hash_0 t1
+         ->  Seq Scan on part_hash_1 t1_1
+         ->  Seq Scan on part_hash_2 t1_2
+         ->  Seq Scan on part_hash_3 t1_3
+         ->  Seq Scan on part_hash_4 t1_4
+         ->  Seq Scan on part_hash_5 t1_5
+         ->  Seq Scan on part_hash_6 t1_6
+         ->  Seq Scan on part_hash_7 t1_7
+         ->  Seq Scan on part_hash_8 t1_8
+         ->  Seq Scan on part_hash_9 t1_9
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on part_hash_0 t2
+               ->  Seq Scan on part_hash_1 t2_1
+               ->  Seq Scan on part_hash_2 t2_2
+               ->  Seq Scan on part_hash_3 t2_3
+               ->  Seq Scan on part_hash_4 t2_4
+               ->  Seq Scan on part_hash_5 t2_5
+               ->  Seq Scan on part_hash_6 t2_6
+               ->  Seq Scan on part_hash_7 t2_7
+               ->  Seq Scan on part_hash_8 t2_8
+               ->  Seq Scan on part_hash_9 t2_9
+(25 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Nested Loop
+   ->  Append
+         ->  Seq Scan on part_multi_2_q1 t1
+               Filter: (dpt = 2)
+         ->  Seq Scan on part_multi_2_q2 t1_1
+               Filter: (dpt = 2)
+         ->  Seq Scan on part_multi_2_q3 t1_2
+               Filter: (dpt = 2)
+         ->  Seq Scan on part_multi_2_q4 t1_3
+               Filter: (dpt = 2)
+   ->  Materialize
+         ->  Append
+               ->  Seq Scan on part_multi_2_q1 t2
+                     Filter: (dpt = 2)
+               ->  Seq Scan on part_multi_2_q2 t2_1
+                     Filter: (dpt = 2)
+               ->  Seq Scan on part_multi_2_q3 t2_2
+                     Filter: (dpt = 2)
+               ->  Seq Scan on part_multi_2_q4 t2_3
+                     Filter: (dpt = 2)
+(20 rows)
+
+-- 2. Hypothetical tables
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Hash Join
+   Hash Cond: (hypo_part_range_1_10000_1.id = hypo_part_range_1_10000.id)
+   ->  Append
+         ->  Seq Scan on hypo_part_range hypo_part_range_1_10000_1
+         ->  Seq Scan on hypo_part_range hypo_part_range_10000_20000_1
+         ->  Seq Scan on hypo_part_range hypo_part_range_20000_30000
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on hypo_part_range hypo_part_range_1_10000
+                     Filter: (id < 15000)
+               ->  Seq Scan on hypo_part_range hypo_part_range_10000_20000
+                     Filter: (id < 15000)
+(12 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_list t1, hypo_part_list t2 WHERE t1.id_key = t2.id_key and t1.id_key < 5;
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Hash Join
+   Hash Cond: (hypo_part_list_1_2_3_1.id_key = hypo_part_list_1_2_3.id_key)
+   ->  Append
+         ->  Seq Scan on hypo_part_list hypo_part_list_1_2_3_1
+         ->  Seq Scan on hypo_part_list hypo_part_list_4_5_6_8_10_1
+         ->  Seq Scan on hypo_part_list hypo_part_list_7_9
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on hypo_part_list hypo_part_list_1_2_3
+                     Filter: (id_key < 5)
+               ->  Seq Scan on hypo_part_list hypo_part_list_4_5_6_8_10
+                     Filter: (id_key < 5)
+(12 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Hash Join
+   Hash Cond: (hypo_part_hash_0.id = hypo_part_hash_0_1.id)
+   ->  Append
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_0
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_1
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_2
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_3
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_4
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_5
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_6
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_7
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_8
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_9
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_0_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_1_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_2_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_3_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_4_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_5_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_6_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_7_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_8_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_9_1
+(25 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi t1, hypo_part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Nested Loop
+   ->  Append
+         ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
+               Filter: (dpt = 2)
+         ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q2
+               Filter: (dpt = 2)
+         ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q3
+               Filter: (dpt = 2)
+         ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q4
+               Filter: (dpt = 2)
+   ->  Materialize
+         ->  Append
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1_1
+                     Filter: (dpt = 2)
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q2_1
+                     Filter: (dpt = 2)
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q3_1
+                     Filter: (dpt = 2)
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q4_1
+                     Filter: (dpt = 2)
+(20 rows)
+
+-- 3. Real tables and hypothetical tables
+EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Hash Join
+   Hash Cond: (hypo_part_range_1_10000.id = t1.id)
+   ->  Append
+         ->  Seq Scan on hypo_part_range hypo_part_range_1_10000
+         ->  Seq Scan on hypo_part_range hypo_part_range_10000_20000
+         ->  Seq Scan on hypo_part_range hypo_part_range_20000_30000
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on part_range_1_10000 t1
+                     Filter: (id < 15000)
+               ->  Seq Scan on part_range_10000_20000 t1_1
+                     Filter: (id < 15000)
+(12 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_list t1, hypo_part_list t2 WHERE t1.id_key = t2.id_key and t1.id_key < 5;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Hash Join
+   Hash Cond: (hypo_part_list_1_2_3.id_key = t1.id_key)
+   ->  Append
+         ->  Seq Scan on hypo_part_list hypo_part_list_1_2_3
+         ->  Seq Scan on hypo_part_list hypo_part_list_4_5_6_8_10
+         ->  Seq Scan on hypo_part_list hypo_part_list_7_9
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on part_list_1_2_3 t1
+                     Filter: (id_key < 5)
+               ->  Seq Scan on part_list_4_5_6_8_10 t1_1
+                     Filter: (id_key < 5)
+(12 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Hash Join
+   Hash Cond: (hypo_part_hash_0.id = t1.id)
+   ->  Append
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_0
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_1
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_2
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_3
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_4
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_5
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_6
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_7
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_8
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_9
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on part_hash_0 t1
+               ->  Seq Scan on part_hash_1 t1_1
+               ->  Seq Scan on part_hash_2 t1_2
+               ->  Seq Scan on part_hash_3 t1_3
+               ->  Seq Scan on part_hash_4 t1_4
+               ->  Seq Scan on part_hash_5 t1_5
+               ->  Seq Scan on part_hash_6 t1_6
+               ->  Seq Scan on part_hash_7 t1_7
+               ->  Seq Scan on part_hash_8 t1_8
+               ->  Seq Scan on part_hash_9 t1_9
+(25 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, hypo_part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Nested Loop
+   ->  Append
+         ->  Seq Scan on part_multi_2_q1 t1
+               Filter: (dpt = 2)
+         ->  Seq Scan on part_multi_2_q2 t1_1
+               Filter: (dpt = 2)
+         ->  Seq Scan on part_multi_2_q3 t1_2
+               Filter: (dpt = 2)
+         ->  Seq Scan on part_multi_2_q4 t1_3
+               Filter: (dpt = 2)
+   ->  Materialize
+         ->  Append
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
+                     Filter: (dpt = 2)
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q2
+                     Filter: (dpt = 2)
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q3
+                     Filter: (dpt = 2)
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q4
+                     Filter: (dpt = 2)
+(20 rows)
+
+-- Partitionwise joins
+-- -------------------
+-- enable partitionwise join
+-- -------------------------
+SET enable_partitionwise_join to true;
+-- 1. Real tables
+EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Append
+   ->  Hash Join
+         Hash Cond: (t1.id = t2.id)
+         ->  Seq Scan on part_range_1_10000 t1
+               Filter: (id < 15000)
+         ->  Hash
+               ->  Seq Scan on part_range_1_10000 t2
+   ->  Hash Join
+         Hash Cond: (t2_1.id = t1_1.id)
+         ->  Seq Scan on part_range_10000_20000 t2_1
+         ->  Hash
+               ->  Seq Scan on part_range_10000_20000 t1_1
+                     Filter: (id < 15000)
+(13 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, part_hash t2 WHERE t1.id = t2.id;
+                   QUERY PLAN                   
+------------------------------------------------
+ Append
+   ->  Hash Join
+         Hash Cond: (t1.id = t2.id)
+         ->  Seq Scan on part_hash_0 t1
+         ->  Hash
+               ->  Seq Scan on part_hash_0 t2
+   ->  Hash Join
+         Hash Cond: (t1_1.id = t2_1.id)
+         ->  Seq Scan on part_hash_1 t1_1
+         ->  Hash
+               ->  Seq Scan on part_hash_1 t2_1
+   ->  Hash Join
+         Hash Cond: (t1_2.id = t2_2.id)
+         ->  Seq Scan on part_hash_2 t1_2
+         ->  Hash
+               ->  Seq Scan on part_hash_2 t2_2
+   ->  Hash Join
+         Hash Cond: (t1_3.id = t2_3.id)
+         ->  Seq Scan on part_hash_3 t1_3
+         ->  Hash
+               ->  Seq Scan on part_hash_3 t2_3
+   ->  Hash Join
+         Hash Cond: (t1_4.id = t2_4.id)
+         ->  Seq Scan on part_hash_4 t1_4
+         ->  Hash
+               ->  Seq Scan on part_hash_4 t2_4
+   ->  Hash Join
+         Hash Cond: (t1_5.id = t2_5.id)
+         ->  Seq Scan on part_hash_5 t1_5
+         ->  Hash
+               ->  Seq Scan on part_hash_5 t2_5
+   ->  Hash Join
+         Hash Cond: (t1_6.id = t2_6.id)
+         ->  Seq Scan on part_hash_6 t1_6
+         ->  Hash
+               ->  Seq Scan on part_hash_6 t2_6
+   ->  Hash Join
+         Hash Cond: (t1_7.id = t2_7.id)
+         ->  Seq Scan on part_hash_7 t1_7
+         ->  Hash
+               ->  Seq Scan on part_hash_7 t2_7
+   ->  Hash Join
+         Hash Cond: (t1_8.id = t2_8.id)
+         ->  Seq Scan on part_hash_8 t1_8
+         ->  Hash
+               ->  Seq Scan on part_hash_8 t2_8
+   ->  Hash Join
+         Hash Cond: (t1_9.id = t2_9.id)
+         ->  Seq Scan on part_hash_9 t1_9
+         ->  Hash
+               ->  Seq Scan on part_hash_9 t2_9
+(51 rows)
+
+-- 2. Hypothetical tables
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+                                       QUERY PLAN                                       
+----------------------------------------------------------------------------------------
+ Append
+   ->  Hash Join
+         Hash Cond: (hypo_part_range_1_10000.id = hypo_part_range_1_10000_1.id)
+         ->  Seq Scan on hypo_part_range hypo_part_range_1_10000
+               Filter: (id < 15000)
+         ->  Hash
+               ->  Seq Scan on hypo_part_range hypo_part_range_1_10000_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_range_10000_20000_1.id = hypo_part_range_10000_20000.id)
+         ->  Seq Scan on hypo_part_range hypo_part_range_10000_20000_1
+         ->  Hash
+               ->  Seq Scan on hypo_part_range hypo_part_range_10000_20000
+                     Filter: (id < 15000)
+(13 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Append
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_0.id = hypo_part_hash_0_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_0
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_0_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_1.id = hypo_part_hash_1_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_1
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_1_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_2.id = hypo_part_hash_2_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_2
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_2_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_3.id = hypo_part_hash_3_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_3
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_3_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_4.id = hypo_part_hash_4_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_4
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_4_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_5.id = hypo_part_hash_5_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_5
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_5_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_6.id = hypo_part_hash_6_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_6
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_6_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_7.id = hypo_part_hash_7_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_7
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_7_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_8.id = hypo_part_hash_8_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_8
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_8_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_9.id = hypo_part_hash_9_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_9
+         ->  Hash
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_9_1
+(51 rows)
+
+-- 3. Real tables and hypothetical tables
+EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Append
+   ->  Hash Join
+         Hash Cond: (t1.id = hypo_part_range_1_10000.id)
+         ->  Seq Scan on part_range_1_10000 t1
+               Filter: (id < 15000)
+         ->  Hash
+               ->  Seq Scan on hypo_part_range hypo_part_range_1_10000
+   ->  Hash Join
+         Hash Cond: (hypo_part_range_10000_20000.id = t1_1.id)
+         ->  Seq Scan on hypo_part_range hypo_part_range_10000_20000
+         ->  Hash
+               ->  Seq Scan on part_range_10000_20000 t1_1
+                     Filter: (id < 15000)
+(13 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Append
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_0.id = t1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_0
+         ->  Hash
+               ->  Seq Scan on part_hash_0 t1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_1.id = t1_1.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_1
+         ->  Hash
+               ->  Seq Scan on part_hash_1 t1_1
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_2.id = t1_2.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_2
+         ->  Hash
+               ->  Seq Scan on part_hash_2 t1_2
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_3.id = t1_3.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_3
+         ->  Hash
+               ->  Seq Scan on part_hash_3 t1_3
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_4.id = t1_4.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_4
+         ->  Hash
+               ->  Seq Scan on part_hash_4 t1_4
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_5.id = t1_5.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_5
+         ->  Hash
+               ->  Seq Scan on part_hash_5 t1_5
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_6.id = t1_6.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_6
+         ->  Hash
+               ->  Seq Scan on part_hash_6 t1_6
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_7.id = t1_7.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_7
+         ->  Hash
+               ->  Seq Scan on part_hash_7 t1_7
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_8.id = t1_8.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_8
+         ->  Hash
+               ->  Seq Scan on part_hash_8 t1_8
+   ->  Hash Join
+         Hash Cond: (hypo_part_hash_9.id = t1_9.id)
+         ->  Seq Scan on hypo_part_hash hypo_part_hash_9
+         ->  Hash
+               ->  Seq Scan on part_hash_9 t1_9
+(51 rows)
 

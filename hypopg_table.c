@@ -222,24 +222,29 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 	{
 		Oid childOid = lfirst_oid(cell);
 		hypoTable *child;
+		int    ancestor;
+
+		/*
+		 * if this is a branch partition, firstpos-1 is the ancestor
+		 * rti of this rel.  if not, rel->relid is the ancestor.
+		 */
+		if (branch)
+			ancestor = firstpos-1;
+		else
+			ancestor = rel->relid;
 
 		child = hypo_find_table(childOid, false);
 
 		/* Expand the child if it's partitioned */
 		if (child->partkey)
 		{
-			/*
-			 * firstpos-1 is the ancestor rti for expanded children of
-			 * this branch.
-			 */
 			newrelid = hypo_expand_partitioned_entry(root, relationObjectId,
-					rel, parentrel, child, newrelid, firstpos-1);
+					rel, parentrel, child, newrelid, ancestor);
 			continue;
 		}
 
-		/* firstpos-1 is the ancestor rti of this children */
 		hypo_expand_single_inheritance_child(root, relationObjectId, rel,
-				parentrel, branch, rte, child, newrelid, firstpos-1, false);
+				parentrel, branch, rte, child, newrelid, ancestor, false);
 
 		newrelid++;
 	}

@@ -115,6 +115,10 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_q4', 'PARTITION OF
 -- Maintenance
 -- -----------
 VACUUM ANALYZE;
+SELECT * FROM hypopg_analyze('hypo_part_range',100);
+SELECT * FROM hypopg_analyze('hypo_part_list',100);
+SELECT * FROM hypopg_analyze('hypo_part_multi',100);
+
 
 -- Test deparsing
 -- ==============
@@ -131,7 +135,7 @@ FROM hypopg_table();
 
 -- Real tables
 -- -----------
--- 1. Range partition
+-- 1. Range partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM part_range;
 EXPLAIN (COSTS OFF) SELECT * FROM part_range WHERE id = 42;
 EXPLAIN (COSTS OFF) SELECT * FROM part_range WHERE id < 15000;
@@ -151,8 +155,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi WHERE dpt = 2;
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi WHERE dt >= '2015-01-05' AND dt < '2015-01-10';
 
 -- Hypothetical tables
--- ------------------"
--- 1. Range partition
+-- -------------------
+-- 1. Range partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range;
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = 42;
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id < 15000;
@@ -170,3 +174,41 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash WHERE id < 15000;
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi WHERE dpt = 2;
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi WHERE dt >= '2015-01-05' AND dt < '2015-01-10';
+
+
+-- Join queries
+-- ------------
+
+-- Simple joins
+-- ------------
+-- 1. Real tables
+EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+EXPLAIN (COSTS OFF) SELECT * FROM part_list t1, part_list t2 WHERE t1.id_key = t2.id_key and t1.id_key < 5;
+EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, part_hash t2 WHERE t1.id = t2.id;
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
+-- 2. Hypothetical tables
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_list t1, hypo_part_list t2 WHERE t1.id_key = t2.id_key and t1.id_key < 5;
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi t1, hypo_part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
+-- 3. Real tables and hypothetical tables
+EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+EXPLAIN (COSTS OFF) SELECT * FROM part_list t1, hypo_part_list t2 WHERE t1.id_key = t2.id_key and t1.id_key < 5;
+EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, hypo_part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
+
+-- Partitionwise joins
+-- -------------------
+-- enable partitionwise join
+-- -------------------------
+SET enable_partitionwise_join to true;
+
+-- 1. Real tables
+EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, part_hash t2 WHERE t1.id = t2.id;
+-- 2. Hypothetical tables
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
+-- 3. Real tables and hypothetical tables
+EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
+EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
