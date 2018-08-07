@@ -44,12 +44,15 @@
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
+#include "nodes/relation.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/var.h"
 #include "parser/parse_utilcmd.h"
 #include "parser/parser.h"
+#include "parser/parsetree.h"
+#include "rewrite/rewriteManip.h"
 #include "storage/bufmgr.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -88,7 +91,8 @@ static bool hypo_can_return(hypoIndex *entry, Oid atttype, int i, char *amname);
 static void hypo_discover_am(char *amname, Oid oid);
 static void hypo_estimate_index_simple(hypoIndex *entry,
 						   BlockNumber *pages, double *tuples);
-static void hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel);
+static void hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel,
+								PlannerInfo *root);
 static int hypo_estimate_index_colsize(hypoIndex *entry, int col);
 static void hypo_index_pfree(hypoIndex *entry);
 static bool hypo_index_remove(Oid indexid);
@@ -886,7 +890,6 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 				nkeycolumns,
 				i;
 
-
 	/* create a node */
 	index = makeNode(IndexOptInfo);
 
@@ -998,10 +1001,21 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 	index->amcanparallel = entry->amcanparallel;
 #endif
 
-	/* these has already been handled in hypo_index_store_parsetree() if any */
-	index->indexprs = list_copy(entry->indexprs);
-	index->indpred = list_copy(entry->indpred);
+	/* these has already been handled in hypo_index_store_parsetree() if any
+	 *
+	 * We need deep copies since we will modify index->indexprs and
+	 * index->indpred later. So we should copy them from hypoIndex via
+	 * copyObject(), not list_copy().
+	 */
+	index->indexprs = copyObject(entry->indexprs);
+	index->indpred = copyObject(entry->indpred);
 	index->predOK = false;		/* will be set later in indxpath.c */
+
+	/* We must modify the copies to have the correct relid for each partition */
+	if (index->indexprs && rel->relid != 1)
+		ChangeVarNodes((Node *) index->indexprs, 1, rel->relid, 0);
+	if (index->indpred && rel->relid != 1)
+		ChangeVarNodes((Node *) index->indpred, 1, rel->relid, 0);
 
 	/*
 	 * Build targetlist using the completed indexprs data. copied from
@@ -1013,10 +1027,11 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 	 * estimate most of the hypothyetical index stuff, more exactly: tuples,
 	 * pages and tree_height (9.3+)
 	 */
-	hypo_estimate_index(entry, rel);
+	hypo_estimate_index(entry, rel, root);
 
 	index->pages = entry->pages;
 	index->tuples = entry->tuples;
+
 #if PG_VERSION_NUM >= 90300
 	index->tree_height = entry->tree_height;
 #endif
@@ -1537,7 +1552,7 @@ hypo_estimate_index_simple(hypoIndex *entry, BlockNumber *pages, double *tuples)
 	/* Close the relation and release the lock now */
 	heap_close(relation, AccessShareLock);
 
-	hypo_estimate_index(entry, rel);
+	hypo_estimate_index(entry, rel, NULL);
 	*pages = entry->pages;
 	*tuples = entry->tuples;
 }
@@ -1548,7 +1563,7 @@ hypo_estimate_index_simple(hypoIndex *entry, BlockNumber *pages, double *tuples)
  * RelOptInfo
  */
 static void
-hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel)
+hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel, PlannerInfo *root)
 {
 	int			i,
 				ind_avg_width = 0;
@@ -1581,8 +1596,8 @@ hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel)
 		 */
 		Selectivity selectivity;
 
-		selectivity = hypo_clauselist_selectivity(NULL, rel, entry->indpred,
-				entry->relid, InvalidOid);
+		selectivity = hypo_clauselist_selectivity(root, rel, entry->indpred,
+												  entry->relid, InvalidOid);
 
 		elog(DEBUG1, "hypopg: selectivity for index \"%s\": %lf",
 				entry->indexname, selectivity);
