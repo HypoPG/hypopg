@@ -1546,6 +1546,13 @@ hypo_estimate_index_simple(hypoIndex *entry, BlockNumber *pages, double *tuples)
 	rel->attr_widths = (int32 *)
 		palloc0((rel->max_attr - rel->min_attr + 1) * sizeof(int32));
 
+	/*
+	 * We may need to call clauselist_selectivity, so even if
+	 * hypo_clauselist_selectivity will take care of overloading rel->relid as
+	 * needed, setup the correct value that we can later use an Assert on.
+	 */
+	rel->relid = 1;
+
 	estimate_rel_size(relation, rel->attr_widths - rel->min_attr,
 					  &rel->pages, &rel->tuples, &rel->allvisfrac);
 

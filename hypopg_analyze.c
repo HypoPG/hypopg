@@ -148,13 +148,20 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 	}
 	else
 	{	/* We estimates selectivity for hypothetical indexes */
-		RangeTblEntry *rt = planner_rt_fetch(save_relid, root);
+		RangeTblEntry *rt = NULL;
+
+		if (root)
+			rt = planner_rt_fetch(save_relid, root);
 
 		/* modify RangeTableEntry to be able to get correct oid */
-		if (rt->values_lists)  /* Is this a hypothetical partition? */
+		if (rt && rt->values_lists)  /* Is this a hypothetical partition? */
 			planner_rt_fetch(1, root_dummy)->values_lists = rt->values_lists;
-		else
+		else if (rt)
 			planner_rt_fetch(1, root_dummy)->relid = rt->relid;
+		else
+		{
+			Assert(save_relid == 1);
+		}
 	}
 #else
 	Assert(clauses != NIL);
