@@ -111,6 +111,8 @@ static List *hypo_get_qual_for_hash(hypoTable *parent, PartitionBoundSpec *spec)
 static List *hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec);
 static List *hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec,
 									 bool for_default);
+static void hypo_check_new_partition_bound(char *relname, hypoTable *parent,
+						  PartitionBoundSpec *spec);
 
 #define HYPO_RTI_IS_TAGGED(rti, root) (planner_rt_fetch(rti, root)->security_barrier)
 #define HYPO_TAG_RTI(rti, root) (planner_rt_fetch(rti, root)->security_barrier = true)
@@ -415,15 +417,10 @@ hypo_generate_partitiondesc(hypoTable *parent)
 	PartitionRangeBound **rbounds = NULL;
 
 	Assert(CurrentMemoryContext != HypoMemoryContext);
-
-	if (key == NULL)
-		return NULL;
+	Assert(key);
 
 	/* Get partition oids from pg_inherits */
 	inhoids = hypo_find_inheritance_children(parent);
-
-	if (!inhoids)
-		return NULL;
 
 	/* Collect bound spec nodes in a list */
 	i = 0;
@@ -1701,18 +1698,6 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 	Assert(stmt);
 
 	boundspec = stmt->partbound;
-	if (boundspec)
-	{
-		if (boundspec->is_default)
-		{
-			Oid defaultpart = hypo_get_default_partition_oid(parentid);
-
-			if (defaultpart != InvalidOid)
-				elog(ERROR, "partition \"%s\" conflicts with existing default partition \"%s\"",
-					quote_identifier(node->relation->relname),
-					quote_identifier(hypo_find_table(defaultpart, false)->tablename));
-		}
-	}
 
 	/* now create the hypothetical index entry */
 	entry = hypo_newTable(parentid);
@@ -1725,6 +1710,7 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 
 	if (boundspec)
 	{
+		hypoTable *parent = hypo_find_table(parentid, false);
 		MemoryContext oldcontext;
 		ParseState *pstate;
 
@@ -1735,6 +1721,11 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 		entry->boundspec = hypo_transformPartitionBound(pstate,
 				hypo_find_table(parentid, false), boundspec);
 		MemoryContextSwitchTo(oldcontext);
+
+		if (parent)
+			hypo_check_new_partition_bound(node->relation->relname,
+					parent,
+					entry->boundspec);
 	}
 
 	hypo_addTable(entry);
@@ -2059,9 +2050,6 @@ hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 			RELKIND_PARTITIONED_TABLE);
 
 	partdesc = hypo_generate_partitiondesc(entry);
-
-	if (!partdesc)
-		return;
 
 	partkey = entry->partkey;
 	rel->part_scheme = hypo_find_partition_scheme(root, partkey);
@@ -2808,6 +2796,300 @@ hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, bool for_de
 
 	return result;
 }
+
+/*
+ * Checks if the new partition's bound overlaps any of the existing partitions
+ * of parent.  Also performs additional checks as necessary per strategy.
+ *
+ * Heavily inspired on check_new_partition_bound
+ */
+static void
+hypo_check_new_partition_bound(char *relname, hypoTable *parent,
+						  PartitionBoundSpec *spec)
+{
+	PartitionKey key = parent->partkey;
+	PartitionDesc partdesc = hypo_generate_partitiondesc(parent);
+	PartitionBoundInfo boundinfo = partdesc->boundinfo;
+	ParseState *pstate = make_parsestate(NULL);
+	int			with = -1;
+	bool		overlap = false;
+
+	if (spec->is_default)
+	{
+		/*
+		 * The default partition bound never conflicts with any other
+		 * partition's; if that's what we're attaching, the only possible
+		 * problem is that one already exists, so check for that and we're
+		 * done.
+		 */
+		if (boundinfo == NULL || !partition_bound_has_default(boundinfo))
+			return;
+
+		/* Default partition already exists, error out. */
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("hypopg: partition \"%s\" conflicts with existing default partition \"%s\"",
+						relname, get_rel_name(partdesc->oids[boundinfo->default_index])),
+				 parser_errposition(pstate, spec->location)));
+	}
+
+	switch (key->strategy)
+	{
+		case PARTITION_STRATEGY_HASH:
+			{
+				Assert(spec->strategy == PARTITION_STRATEGY_HASH);
+				Assert(spec->remainder >= 0 && spec->remainder < spec->modulus);
+
+				if (partdesc->nparts > 0)
+				{
+					Datum	  **datums = boundinfo->datums;
+					int			ndatums = boundinfo->ndatums;
+					int			greatest_modulus;
+					int			remainder;
+					int			offset;
+					bool		valid_modulus = true;
+					int			prev_modulus,	/* Previous largest modulus */
+								next_modulus;	/* Next largest modulus */
+
+					/*
+					 * Check rule that every modulus must be a factor of the
+					 * next larger modulus.  For example, if you have a bunch
+					 * of partitions that all have modulus 5, you can add a
+					 * new partition with modulus 10 or a new partition with
+					 * modulus 15, but you cannot add both a partition with
+					 * modulus 10 and a partition with modulus 15, because 10
+					 * is not a factor of 15.
+					 *
+					 * Get the greatest (modulus, remainder) pair contained in
+					 * boundinfo->datums that is less than or equal to the
+					 * (spec->modulus, spec->remainder) pair.
+					 */
+					offset = partition_hash_bsearch(boundinfo,
+													spec->modulus,
+													spec->remainder);
+					if (offset < 0)
+					{
+						next_modulus = DatumGetInt32(datums[0][0]);
+						valid_modulus = (next_modulus % spec->modulus) == 0;
+					}
+					else
+					{
+						prev_modulus = DatumGetInt32(datums[offset][0]);
+						valid_modulus = (spec->modulus % prev_modulus) == 0;
+
+						if (valid_modulus && (offset + 1) < ndatums)
+						{
+							next_modulus = DatumGetInt32(datums[offset + 1][0]);
+							valid_modulus = (next_modulus % spec->modulus) == 0;
+						}
+					}
+
+					if (!valid_modulus)
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+								 errmsg("hypopg: every hash partition modulus must be a factor of the next larger modulus")));
+
+					greatest_modulus = get_hash_partition_greatest_modulus(boundinfo);
+					remainder = spec->remainder;
+
+					/*
+					 * Normally, the lowest remainder that could conflict with
+					 * the new partition is equal to the remainder specified
+					 * for the new partition, but when the new partition has a
+					 * modulus higher than any used so far, we need to adjust.
+					 */
+					if (remainder >= greatest_modulus)
+						remainder = remainder % greatest_modulus;
+
+					/* Check every potentially-conflicting remainder. */
+					do
+					{
+						if (boundinfo->indexes[remainder] != -1)
+						{
+							overlap = true;
+							with = boundinfo->indexes[remainder];
+							break;
+						}
+						remainder += spec->modulus;
+					} while (remainder < greatest_modulus);
+				}
+
+				break;
+			}
+
+		case PARTITION_STRATEGY_LIST:
+			{
+				Assert(spec->strategy == PARTITION_STRATEGY_LIST);
+
+				if (partdesc->nparts > 0)
+				{
+					ListCell   *cell;
+
+					Assert(boundinfo &&
+						   boundinfo->strategy == PARTITION_STRATEGY_LIST &&
+						   (boundinfo->ndatums > 0 ||
+							partition_bound_accepts_nulls(boundinfo) ||
+							partition_bound_has_default(boundinfo)));
+
+					foreach(cell, spec->listdatums)
+					{
+						Const	   *val = castNode(Const, lfirst(cell));
+
+						if (!val->constisnull)
+						{
+							int			offset;
+							bool		equal;
+
+							offset = partition_list_bsearch(&key->partsupfunc[0],
+															key->partcollation,
+															boundinfo,
+															val->constvalue,
+															&equal);
+							if (offset >= 0 && equal)
+							{
+								overlap = true;
+								with = boundinfo->indexes[offset];
+								break;
+							}
+						}
+						else if (partition_bound_accepts_nulls(boundinfo))
+						{
+							overlap = true;
+							with = boundinfo->null_index;
+							break;
+						}
+					}
+				}
+
+				break;
+			}
+
+		case PARTITION_STRATEGY_RANGE:
+			{
+				PartitionRangeBound *lower,
+						   *upper;
+
+				Assert(spec->strategy == PARTITION_STRATEGY_RANGE);
+				lower = make_one_partition_rbound(key, -1, spec->lowerdatums, true);
+				upper = make_one_partition_rbound(key, -1, spec->upperdatums, false);
+
+				/*
+				 * First check if the resulting range would be empty with
+				 * specified lower and upper bounds
+				 */
+				if (partition_rbound_cmp(key->partnatts, key->partsupfunc,
+										 key->partcollation, lower->datums,
+										 lower->kind, true, upper) >= 0)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+							 errmsg("hypopg: empty range bound specified for partition \"%s\"",
+									relname),
+							 errdetail("hypopg: Specified lower bound %s is greater than or equal to upper bound %s.",
+									   get_range_partbound_string(spec->lowerdatums),
+									   get_range_partbound_string(spec->upperdatums)),
+							 parser_errposition(pstate, spec->location)));
+				}
+
+				if (partdesc->nparts > 0)
+				{
+					int			offset;
+					bool		equal;
+
+					Assert(boundinfo &&
+						   boundinfo->strategy == PARTITION_STRATEGY_RANGE &&
+						   (boundinfo->ndatums > 0 ||
+							partition_bound_has_default(boundinfo)));
+
+					/*
+					 * Test whether the new lower bound (which is treated
+					 * inclusively as part of the new partition) lies inside
+					 * an existing partition, or in a gap.
+					 *
+					 * If it's inside an existing partition, the bound at
+					 * offset + 1 will be the upper bound of that partition,
+					 * and its index will be >= 0.
+					 *
+					 * If it's in a gap, the bound at offset + 1 will be the
+					 * lower bound of the next partition, and its index will
+					 * be -1. This is also true if there is no next partition,
+					 * since the index array is initialised with an extra -1
+					 * at the end.
+					 */
+					offset = partition_range_bsearch(key->partnatts,
+													 key->partsupfunc,
+													 key->partcollation,
+													 boundinfo, lower,
+													 &equal);
+
+					if (boundinfo->indexes[offset + 1] < 0)
+					{
+						/*
+						 * Check that the new partition will fit in the gap.
+						 * For it to fit, the new upper bound must be less
+						 * than or equal to the lower bound of the next
+						 * partition, if there is one.
+						 */
+						if (offset + 1 < boundinfo->ndatums)
+						{
+							int32		cmpval;
+							Datum	   *datums;
+							PartitionRangeDatumKind *kind;
+							bool		is_lower;
+
+							datums = boundinfo->datums[offset + 1];
+							kind = boundinfo->kind[offset + 1];
+							is_lower = (boundinfo->indexes[offset + 1] == -1);
+
+							cmpval = partition_rbound_cmp(key->partnatts,
+														  key->partsupfunc,
+														  key->partcollation,
+														  datums, kind,
+														  is_lower, upper);
+							if (cmpval < 0)
+							{
+								/*
+								 * The new partition overlaps with the
+								 * existing partition between offset + 1 and
+								 * offset + 2.
+								 */
+								overlap = true;
+								with = boundinfo->indexes[offset + 2];
+							}
+						}
+					}
+					else
+					{
+						/*
+						 * The new partition overlaps with the existing
+						 * partition between offset and offset + 1.
+						 */
+						overlap = true;
+						with = boundinfo->indexes[offset + 1];
+					}
+				}
+
+				break;
+			}
+
+		default:
+			elog(ERROR, "hypopg: unexpected partition strategy: %d",
+				 (int) key->strategy);
+	}
+
+	if (overlap)
+	{
+		hypoTable *table = hypo_find_table(partdesc->oids[with], false);
+
+		Assert(with >= 0);
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("hypopg: partition \"%s\" would overlap partition \"%s\"",
+						relname, table->tablename),
+				 parser_errposition(pstate, spec->location)));
+	}
+}
+
 #endif
 
 /*
