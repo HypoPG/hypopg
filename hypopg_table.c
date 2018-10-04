@@ -140,12 +140,12 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 		int parent_rti)
 {
 	hypoTable *parent;
-	List *inhoids;
 	int nparts;
 	RangeTblEntry *rte;
-	ListCell *cell;
 	int newrelid, oldsize = root->simple_rel_array_size;
-	int i;
+	int i, j;
+	PartitionDesc partdesc;
+	Oid *partoids;
 
 	Assert(hypo_table_oid_is_hypothetical(relationObjectId));
 
@@ -154,9 +154,10 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 	else
 		parent = branch;
 
-	/* get all of the partition oids */
-	inhoids = hypo_find_inheritance_children(parent);
-	nparts = list_length(inhoids);
+	/* get all of the partition oids from PartitionDesc */
+	partdesc = hypo_generate_partitiondesc(parent);
+	partoids = partdesc->oids;
+	nparts = partdesc->nparts;
 
 	/*
 	 * resize and clean rte and rel arrays.  We need a slot for self expansion
@@ -220,9 +221,10 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 	 * for all hypothetical partitions
 	 */
 	newrelid = firstpos + 1;
-	foreach(cell, inhoids)
+
+	for (j = 0; j < nparts; j++)
 	{
-		Oid childOid = lfirst_oid(cell);
+		Oid childOid = partoids[j];
 		hypoTable *child;
 		int    ancestor;
 

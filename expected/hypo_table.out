@@ -14,41 +14,41 @@ INSERT INTO part_range SELECT i, 'line ' || i FROM generate_series(1, 29999) i;
 DROP TABLE IF EXISTS part_list;
 NOTICE:  table "part_list" does not exist, skipping
 CREATE TABLE part_list (id integer, id_key integer, val text) PARTITION BY LIST (id_key);
-CREATE TABLE part_list_1_2_3 PARTITION OF part_list FOR VALUES IN (1, 2, 3);
 CREATE TABLE part_list_4_5_6_8_10 PARTITION OF part_list FOR VALUES IN (4, 5, 6, 8, 10);
 CREATE TABLE part_list_7_9 PARTITION OF part_list FOR VALUES IN (7, 9);
+CREATE TABLE part_list_1_2_3 PARTITION OF part_list FOR VALUES IN (1, 2, 3);
 INSERT INTO part_list SELECT i, (i % 9) + 1, 'line ' || i FROM generate_series(1, 50000) i;
 -- 3. Hash partitioning
 DROP TABLE IF EXISTS part_hash;
 NOTICE:  table "part_hash" does not exist, skipping
 CREATE TABLE part_hash (id integer, val text) PARTITION BY HASH (id);
-CREATE TABLE part_hash_0 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0);
-CREATE TABLE part_hash_1 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 1);
-CREATE TABLE part_hash_2 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 2);
-CREATE TABLE part_hash_3 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 3);
-CREATE TABLE part_hash_4 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 4);
-CREATE TABLE part_hash_5 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 5);
-CREATE TABLE part_hash_6 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 6);
-CREATE TABLE part_hash_7 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 7);
-CREATE TABLE part_hash_8 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 8);
 CREATE TABLE part_hash_9 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 9);
+CREATE TABLE part_hash_8 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 8);
+CREATE TABLE part_hash_7 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 7);
+CREATE TABLE part_hash_6 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 6);
+CREATE TABLE part_hash_5 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 5);
+CREATE TABLE part_hash_4 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 4);
+CREATE TABLE part_hash_3 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 3);
+CREATE TABLE part_hash_2 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 2);
+CREATE TABLE part_hash_1 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 1);
+CREATE TABLE part_hash_0 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0);
 INSERT INTO part_hash SELECT i, 'line ' || i FROM generate_series(1, 90000) i;
 -- 4. Multi level range
 DROP TABLE IF EXISTS part_multi;
 NOTICE:  table "part_multi" does not exist, skipping
 CREATE TABLE part_multi(dpt smallint, dt date, val text) PARTITION BY LIST (dpt);
-CREATE TABLE part_multi_1 PARTITION OF part_multi FOR VALUES IN (1) PARTITION BY RANGE(dt);
-CREATE TABLE part_multi_1_q1 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$) PARTITION BY RANGE (dt);
-CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
-CREATE TABLE part_multi_1_q1_b PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$);
-CREATE TABLE part_multi_1_q2 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
-CREATE TABLE part_multi_1_q3 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
-CREATE TABLE part_multi_1_q4 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
 CREATE TABLE part_multi_2 PARTITION OF part_multi FOR VALUES IN (2) PARTITION BY RANGE(dt);
 CREATE TABLE part_multi_2_q1 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$);
 CREATE TABLE part_multi_2_q2 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
 CREATE TABLE part_multi_2_q3 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
 CREATE TABLE part_multi_2_q4 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
+CREATE TABLE part_multi_1 PARTITION OF part_multi FOR VALUES IN (1) PARTITION BY RANGE(dt);
+CREATE TABLE part_multi_1_q2 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
+CREATE TABLE part_multi_1_q3 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
+CREATE TABLE part_multi_1_q4 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
+CREATE TABLE part_multi_1_q1 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$) PARTITION BY RANGE (dt);
+CREATE TABLE part_multi_1_q1_b PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$);
+CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
 CREATE TABLE part_multi_3 PARTITION OF part_multi FOR VALUES IN (3) PARTITION BY RANGE(dt);
 CREATE TABLE part_multi_3_q1 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$);
 CREATE TABLE part_multi_3_q2 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
@@ -110,12 +110,6 @@ SELECT * FROM hypopg_partition_table('hypo_part_list', 'PARTITION BY LIST (id_ke
  t
 (1 row)
 
-SELECT tablename FROM hypopg_add_partition('hypo_part_list_1_2_3', 'PARTITION OF hypo_part_list FOR VALUES IN (1, 2, 3)');
-      tablename       
-----------------------
- hypo_part_list_1_2_3
-(1 row)
-
 SELECT tablename FROM hypopg_add_partition('hypo_part_list_4_5_6_8_10', 'PARTITION OF hypo_part_list FOR VALUES IN (4, 5, 6, 8, 10)');
          tablename         
 ---------------------------
@@ -126,6 +120,12 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_list_7_9', 'PARTITION OF h
      tablename      
 --------------------
  hypo_part_list_7_9
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_list_1_2_3', 'PARTITION OF hypo_part_list FOR VALUES IN (1, 2, 3)');
+      tablename       
+----------------------
+ hypo_part_list_1_2_3
 (1 row)
 
 -- 3. Hash partitioning
@@ -139,52 +139,10 @@ SELECT * FROM hypopg_partition_table('hypo_part_hash', 'PARTITION BY HASH (id)')
  t
 (1 row)
 
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_9', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 9)');
     tablename     
 ------------------
- hypo_part_hash_0
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_1', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 1)');
-    tablename     
-------------------
- hypo_part_hash_1
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_2', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 2)');
-    tablename     
-------------------
- hypo_part_hash_2
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_3', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 3)');
-    tablename     
-------------------
- hypo_part_hash_3
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_4', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 4)');
-    tablename     
-------------------
- hypo_part_hash_4
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_5', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 5)');
-    tablename     
-------------------
- hypo_part_hash_5
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_6', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 6)');
-    tablename     
-------------------
- hypo_part_hash_6
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_7', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 7)');
-    tablename     
-------------------
- hypo_part_hash_7
+ hypo_part_hash_9
 (1 row)
 
 SELECT tablename FROM hypopg_add_partition('hypo_part_hash_8', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 8)');
@@ -193,10 +151,52 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_hash_8', 'PARTITION OF hyp
  hypo_part_hash_8
 (1 row)
 
-SELECT tablename FROM hypopg_add_partition('hypo_part_hash_9', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 9)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_7', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 7)');
     tablename     
 ------------------
- hypo_part_hash_9
+ hypo_part_hash_7
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_6', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 6)');
+    tablename     
+------------------
+ hypo_part_hash_6
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_5', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 5)');
+    tablename     
+------------------
+ hypo_part_hash_5
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_4', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 4)');
+    tablename     
+------------------
+ hypo_part_hash_4
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_3', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 3)');
+    tablename     
+------------------
+ hypo_part_hash_3
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_2', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 2)');
+    tablename     
+------------------
+ hypo_part_hash_2
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_1', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 1)');
+    tablename     
+------------------
+ hypo_part_hash_1
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0)');
+    tablename     
+------------------
+ hypo_part_hash_0
 (1 row)
 
 -- 4. Multi level range
@@ -208,48 +208,6 @@ SELECT * FROM hypopg_partition_table('hypo_part_multi', 'PARTITION BY LIST (dpt)
  hypopg_partition_table 
 ------------------------
  t
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1', 'PARTITION OF hypo_part_multi FOR VALUES IN (1)', 'PARTITION BY RANGE(dt)');
-     tablename     
--------------------
- hypo_part_multi_1
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)','PARTITION BY RANGE (dt)');
-      tablename       
-----------------------
- hypo_part_multi_1_q1
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
-       tablename        
-------------------------
- hypo_part_multi_1_q1_a
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_b', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$)');
-       tablename        
-------------------------
- hypo_part_multi_1_q1_b
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q2', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$)');
-      tablename       
-----------------------
- hypo_part_multi_1_q2
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q3', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$)');
-      tablename       
-----------------------
- hypo_part_multi_1_q3
-(1 row)
-
-SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q4', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$)');
-      tablename       
-----------------------
- hypo_part_multi_1_q4
 (1 row)
 
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2', 'PARTITION OF hypo_part_multi FOR VALUES IN (2)', 'PARTITION BY RANGE(dt)');
@@ -280,6 +238,48 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_q4', 'PARTITION OF
       tablename       
 ----------------------
  hypo_part_multi_2_q4
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1', 'PARTITION OF hypo_part_multi FOR VALUES IN (1)', 'PARTITION BY RANGE(dt)');
+     tablename     
+-------------------
+ hypo_part_multi_1
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q2', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$)');
+      tablename       
+----------------------
+ hypo_part_multi_1_q2
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q3', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$)');
+      tablename       
+----------------------
+ hypo_part_multi_1_q3
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q4', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$)');
+      tablename       
+----------------------
+ hypo_part_multi_1_q4
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)','PARTITION BY RANGE (dt)');
+      tablename       
+----------------------
+ hypo_part_multi_1_q1
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_b', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$)');
+       tablename        
+------------------------
+ hypo_part_multi_1_q1_b
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
+       tablename        
+------------------------
+ hypo_part_multi_1_q1_a
 (1 row)
 
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3', 'PARTITION OF hypo_part_multi FOR VALUES IN (3)', 'PARTITION BY RANGE(dt)');
@@ -346,33 +346,33 @@ FROM hypopg_table();
  f       | hypo_part_range_10000_20000 | f                | t                    |                            | FOR VALUES FROM (10000) TO (20000)
  f       | hypo_part_range_20000_30000 | f                | t                    |                            | FOR VALUES FROM (20000) TO (30000)
  t       | hypo_part_list              | t                | f                    | PARTITION BY LIST (id_key) | 
- f       | hypo_part_list_1_2_3        | f                | t                    |                            | FOR VALUES IN (1, 2, 3)
  f       | hypo_part_list_4_5_6_8_10   | f                | t                    |                            | FOR VALUES IN (4, 5, 6, 8, 10)
  f       | hypo_part_list_7_9          | f                | t                    |                            | FOR VALUES IN (7, 9)
+ f       | hypo_part_list_1_2_3        | f                | t                    |                            | FOR VALUES IN (1, 2, 3)
  t       | hypo_part_hash              | t                | f                    | PARTITION BY HASH (id)     | 
- f       | hypo_part_hash_0            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 0)
- f       | hypo_part_hash_1            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 1)
- f       | hypo_part_hash_2            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 2)
- f       | hypo_part_hash_3            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 3)
- f       | hypo_part_hash_4            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 4)
- f       | hypo_part_hash_5            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 5)
- f       | hypo_part_hash_6            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 6)
- f       | hypo_part_hash_7            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 7)
- f       | hypo_part_hash_8            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 8)
  f       | hypo_part_hash_9            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 9)
+ f       | hypo_part_hash_8            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 8)
+ f       | hypo_part_hash_7            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 7)
+ f       | hypo_part_hash_6            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 6)
+ f       | hypo_part_hash_5            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 5)
+ f       | hypo_part_hash_4            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 4)
+ f       | hypo_part_hash_3            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 3)
+ f       | hypo_part_hash_2            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 2)
+ f       | hypo_part_hash_1            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 1)
+ f       | hypo_part_hash_0            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 0)
  t       | hypo_part_multi             | t                | f                    | PARTITION BY LIST (dpt)    | 
- f       | hypo_part_multi_1           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('1')
- f       | hypo_part_multi_1_q1        | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
- f       | hypo_part_multi_1_q1_a      | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('02-01-2015')
- f       | hypo_part_multi_1_q1_b      | f                | t                    |                            | FOR VALUES FROM ('02-01-2015') TO ('04-01-2015')
- f       | hypo_part_multi_1_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
- f       | hypo_part_multi_1_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
- f       | hypo_part_multi_1_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
  f       | hypo_part_multi_2           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('2')
  f       | hypo_part_multi_2_q1        | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
  f       | hypo_part_multi_2_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
  f       | hypo_part_multi_2_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
  f       | hypo_part_multi_2_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
+ f       | hypo_part_multi_1           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('1')
+ f       | hypo_part_multi_1_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
+ f       | hypo_part_multi_1_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
+ f       | hypo_part_multi_1_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
+ f       | hypo_part_multi_1_q1        | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
+ f       | hypo_part_multi_1_q1_b      | f                | t                    |                            | FOR VALUES FROM ('02-01-2015') TO ('04-01-2015')
+ f       | hypo_part_multi_1_q1_a      | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('02-01-2015')
  f       | hypo_part_multi_3           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('3')
  f       | hypo_part_multi_3_q1        | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
  f       | hypo_part_multi_3_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
