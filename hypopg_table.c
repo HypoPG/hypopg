@@ -100,7 +100,6 @@ static hypoTable *hypo_newTable(Oid parentid);
 static hypoTable *hypo_table_find_parent_oid(Oid parentid);
 static hypoTable *hypo_table_name_get_entry(const char *name);
 static void hypo_table_pfree(hypoTable *entry);
-static bool hypo_table_remove(Oid tableid);
 static const hypoTable *hypo_table_store_parsetree(CreateStmt *node,
 						   const char *queryString, Oid parentid, Oid rootid);
 static PartitionBoundSpec *hypo_transformPartitionBound(ParseState *pstate,
@@ -1537,7 +1536,7 @@ hypo_find_table(Oid tableid, bool missing_ok)
 	}
 
 	if (!missing_ok)
-		elog(ERROR, "hypopg: could not find parent for %d", tableid);
+		elog(ERROR, "hypopg: could not find entry for oid %d", tableid);
 
 	return NULL;
 }
@@ -1618,18 +1617,35 @@ hypo_table_pfree(hypoTable *entry)
  * partitioned table) from the list of hypothetical tables.  pfree (by calling
  * hypo_table_pfree) all memory that has been allocated.  Also free all stored
  * hypothetical statistics belonging to it if any.
+ *
+ * The deep parameter specify whether the function should try to perform the
+ * same cleanup for all entries whose rootid is the given tableid.  All
+ * function should pass true for this parameter, except hypo_table_reset()
+ * which will sequentially iterate over all entries.
  */
-static bool
-hypo_table_remove(Oid tableid)
+bool
+hypo_table_remove(Oid tableid, bool deep)
 {
 	ListCell   *lc;
+	bool		found = false;
 
-	foreach(lc, hypoTables)
+	/*
+	 * The cells can be removed during the loop, so we can't iterate using
+	 * standard foreach / lnext macros.
+	 */
+	lc = list_head(hypoTables);
+	while (lc != NULL)
 	{
 		hypoTable  *entry = (hypoTable *) lfirst(lc);
 
-		if (entry->oid == tableid)
+		/* get the next cell right now, before we might remove the entry */
+		lc = lnext(lc);
+
+		if (entry->oid == tableid || entry->rootid == tableid)
 		{
+			if (!deep && entry->oid != tableid)
+				continue;
+
 #if PG_VERSION_NUM >= 100000
 			/* Remove any stored statistics */
 			hypo_stat_remove(tableid);
@@ -1637,10 +1653,20 @@ hypo_table_remove(Oid tableid)
 
 			hypoTables = list_delete_ptr(hypoTables, entry);
 			hypo_table_pfree(entry);
-			return true;
+
+			/* if ws're not doing a deep remove, the only match we can get is
+			 * entry which oid is the passed tableid.  In this case, no need to
+			 * continue looping, return true to indicate that we found and
+			 * removed and entry.
+			 */
+			if (!deep)
+				return true;
+
+			found = true;
 		}
 	}
-	return false;
+
+	return found;
 }
 
 /*
@@ -1660,7 +1686,7 @@ hypo_table_reset(void)
 	{
 		hypoTable  *entry = (hypoTable *) lfirst(lc);
 
-		hypo_table_remove(entry->oid);
+		hypo_table_remove(entry->oid, false);
 	}
 
 	list_free(hypoTables);
@@ -3118,6 +3144,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	bool		nulls[HYPO_ADD_PART_COLS];
 	int			i = 0;
 
+	/* Process any pending invalidation */
+	hypo_process_inval();
+
 	if (!PG_ARGISNULL(2))
 		partition_by = TextDatumGetCString(PG_GETARG_TEXT_PP(2));
 
@@ -3218,7 +3247,10 @@ HYPO_PARTITION_NOT_SUPPORTED();
 #else
 	Oid			tableid = PG_GETARG_OID(0);
 
-	PG_RETURN_BOOL(hypo_table_remove(tableid));
+	/* Process any pending invalidation */
+	hypo_process_inval();
+
+	PG_RETURN_BOOL(hypo_table_remove(tableid, true));
 #endif
 }
 
@@ -3244,6 +3276,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	ListCell	   *lc;
 	StringInfoData	sql;
 	RawStmt		   *raw_stmt;
+
+	/* Process any pending invalidation */
+	hypo_process_inval();
 
 	tp = SearchSysCache1(RELOID, ObjectIdGetDatum(tableid));
 	if (HeapTupleIsValid(tp))
@@ -3314,6 +3349,9 @@ hypopg_reset_table(PG_FUNCTION_ARGS)
 #if PG_VERSION_NUM < 100000
 HYPO_PARTITION_NOT_SUPPORTED();
 #else
+	/* Process any pending invalidation */
+	hypo_process_inval();
+
 	hypo_table_reset();
 	PG_RETURN_VOID();
 #endif
@@ -3334,6 +3372,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
 	ListCell   *lc;
+
+	/* Process any pending invalidation */
+	hypo_process_inval();
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))

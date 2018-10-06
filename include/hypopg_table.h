@@ -72,6 +72,7 @@ List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
 					    hypoTable *parent);
 List *hypo_get_partition_quals_inh(hypoTable *part, hypoTable *parent);
 bool hypo_table_oid_is_hypothetical(Oid relid);
+bool hypo_table_remove(Oid tableid, bool deep);
 void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 					 Oid relationObjectId,
 					 RelOptInfo *rel);

@@ -21,6 +21,11 @@
 #if PG_VERSION_NUM >= 90300
 #include "access/htup_details.h"
 #endif
+#if PG_VERSION_NUM >= 100000
+#include "access/xact.h"
+#endif
+#include "utils/inval.h"
+#include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
 #include "utils/syscache.h"
 
@@ -40,6 +45,12 @@ PG_MODULE_MAGIC;
 bool isExplain;
 bool hypo_is_enabled;
 MemoryContext HypoMemoryContext;
+
+/*--- Variables not exported ---*/
+
+static List *pending_invals = NIL; /* List of interesting OID for which we
+									  received inval messages that need to be
+									  processed. */
 
 /*--- Functions --- */
 
@@ -89,6 +100,7 @@ static bool hypo_get_relation_stats_hook(PlannerInfo *root,
 static get_relation_stats_hook_type prev_get_relation_stats_hook = NULL;
 
 static bool hypo_query_walker(Node *node);
+static void hypo_CacheRelCallback(Datum arg, Oid relid);
 
 void
 _PG_init(void)
@@ -134,6 +146,7 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
+	CacheRegisterRelcacheCallback(hypo_CacheRelCallback, (Datum) 0);
 }
 
 void
@@ -214,6 +227,13 @@ hypo_utility_hook(
 						    hypo_query_walker,
 						    NULL, 0);
 
+	/*
+	 * Process pending invalidation.  For now, just do it if the current query
+	 * might try to acess stored hypothetical objects
+	 */
+	if (isExplain && list_length(pending_invals) != 0)
+		hypo_process_inval();
+
 	if (prev_utility_hook)
 		prev_utility_hook(
 #if PG_VERSION_NUM >= 100000
@@ -289,6 +309,76 @@ hypo_query_walker(Node *parsetree)
 			return false;
 	}
 	return false;
+}
+
+/*
+ * Callback for relcache inval message.  Detect if the given relid correspond
+ * to something we should take care of.  For now, we only care of table being
+ * dropped for which we have hypothetical partitioning information, thus
+ * needing to remove relevant hypoTable entries.  At this point, we can't
+ * detect if the inval message is due to table dropping or not, because any
+ * cache access require a valid transaction, and we don't have a guarantee that
+ * it's the case at this point.  Instead, maintain a deduplicated list of
+ * interesting OID that will be processed before usage of hypothetical
+ * partitioned object.
+ */
+static void
+hypo_CacheRelCallback(Datum arg, Oid relid)
+{
+#if PG_VERSION_NUM >= 100000
+	hypoTable *entry;
+
+	entry = hypo_find_table(relid, true);
+	if (entry)
+	{
+		MemoryContext oldcontext;
+
+		oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+		pending_invals = list_append_unique_oid(pending_invals, relid);
+		MemoryContextSwitchTo(oldcontext);
+	}
+#endif
+}
+
+/* Process any RelCache invalidation we previously received.  We have to
+ * process them asynchronously, because we have to process it only if the
+ * invalidation message was due to the original table being dropped.  We try to
+ * detect this case by comparing the relid'd relname if it exists, and this
+ * require a valid snapshot if may not be the case at the moment we receive the
+ * inval message.
+ */
+void
+hypo_process_inval(void)
+{
+#if PG_VERSION_NUM >= 100000
+	ListCell *lc;
+
+	Assert(IsTransactionState());
+
+	if (pending_invals == NIL)
+		return;
+
+	foreach(lc, pending_invals)
+	{
+		Oid			relid = lfirst_oid(lc);
+		hypoTable  *entry = hypo_find_table(relid, false);
+		char   *relname = get_rel_name(relid);
+
+		/*
+		 * The pending invalidations should be filtered and recorded after
+		 * removing an entry, and should always be processed before any attempt
+		 * to remove a hypothetical object, so we shoudl always find a
+		 * hypoTable at this point.
+		 */
+		Assert(entry);
+
+		if (!relname || (strcmp(relname, entry->tablename) != 0))
+			hypo_table_remove(relid, true);
+	}
+
+	list_free(pending_invals);
+	pending_invals = NIL;
+#endif
 }
 
 /* Reset the isExplain flag after each query */

@@ -25,5 +25,6 @@ extern bool hypo_is_enabled;
 extern MemoryContext HypoMemoryContext;
 
 Oid hypo_getNewOid(Oid relid);
+void hypo_process_inval(void);
 
 #endif

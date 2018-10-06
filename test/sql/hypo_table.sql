@@ -226,3 +226,17 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_list_1_2_3_dup', 'PARTITIO
 SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0_dup', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0)');
 -- Overlapping range bounds, subpartition
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a_dup', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
+
+-- relcache callback test
+-- ======================
+
+SELECT tablename FROM hypopg_table() WHERE tablename LIKE 'hypo_part_range%' ORDER BY tablename COLLATE "C";
+DROP TABLE hypo_part_range;
+SELECT tablename FROM hypopg_table() WHERE tablename LIKE 'hypo_part_range%' ORDER BY tablename COLLATE "C";
+CREATE TABLE hypo_part_range (id integer, val text);
+INSERT INTO hypo_part_range SELECT i, 'line ' || i FROM generate_series(1, 29999) i;
+SELECT * FROM hypopg_partition_table('hypo_part_range', 'PARTITION BY RANGE (id)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_range_10000_20000', 'PARTITION OF hypo_part_range FOR VALUES FROM (10000) TO (20000)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_range_20000_30000', 'PARTITION OF hypo_part_range FOR VALUES FROM (20000) TO (30000)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = 42;

@@ -551,10 +551,15 @@ HYPO_PARTITION_NOT_SUPPORTED();
 #else
 	Oid				root_tableid = PG_GETARG_OID(0);
 	float4			fraction = PG_GETARG_FLOAT4(1);
-	hypoTable	   *root_entry = hypo_find_table(root_tableid, true);
+	hypoTable	   *root_entry;
 	Relation		onerel;
 	Relation		pgstats;
 	int				ret;
+
+	/* Process any pending invalidation */
+	hypo_process_inval();
+
+	root_entry = hypo_find_table(root_tableid, true);
 
 	if (!root_entry)
 		elog(ERROR, "hypopg: this table is not hypothetically partitioned");
@@ -616,6 +621,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	HASH_SEQ_STATUS hash_seq;
 	hypoStatsEntry *entry;
 	Relation		pgstats;
+
+	/* Process any pending invalidation */
+	hypo_process_inval();
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
