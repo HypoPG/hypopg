@@ -327,6 +327,8 @@ SELECT * FROM hypopg_analyze('hypo_part_list',100);
  
 (1 row)
 
+SELECT * FROM hypopg_analyze('hypo_part_hash',100);
+ERROR:  hypopg: hypopg_analyze() on hypothetical hash partitioning is not supported
 SELECT * FROM hypopg_analyze('hypo_part_multi',100);
  hypopg_analyze 
 ----------------
@@ -962,33 +964,33 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_list t1, hypo_part_list t2 WHERE t1.id_ke
 (12 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
-                       QUERY PLAN                        
----------------------------------------------------------
+                          QUERY PLAN                           
+---------------------------------------------------------------
  Hash Join
-   Hash Cond: (hypo_part_hash_0.id = t1.id)
+   Hash Cond: (t1.id = hypo_part_hash_0.id)
    ->  Append
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_0
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_1
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_2
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_3
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_4
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_5
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_6
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_7
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_8
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_9
+         ->  Seq Scan on part_hash_0 t1
+         ->  Seq Scan on part_hash_1 t1_1
+         ->  Seq Scan on part_hash_2 t1_2
+         ->  Seq Scan on part_hash_3 t1_3
+         ->  Seq Scan on part_hash_4 t1_4
+         ->  Seq Scan on part_hash_5 t1_5
+         ->  Seq Scan on part_hash_6 t1_6
+         ->  Seq Scan on part_hash_7 t1_7
+         ->  Seq Scan on part_hash_8 t1_8
+         ->  Seq Scan on part_hash_9 t1_9
    ->  Hash
          ->  Append
-               ->  Seq Scan on part_hash_0 t1
-               ->  Seq Scan on part_hash_1 t1_1
-               ->  Seq Scan on part_hash_2 t1_2
-               ->  Seq Scan on part_hash_3 t1_3
-               ->  Seq Scan on part_hash_4 t1_4
-               ->  Seq Scan on part_hash_5 t1_5
-               ->  Seq Scan on part_hash_6 t1_6
-               ->  Seq Scan on part_hash_7 t1_7
-               ->  Seq Scan on part_hash_8 t1_8
-               ->  Seq Scan on part_hash_9 t1_9
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_0
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_2
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_3
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_4
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_5
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_6
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_7
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_8
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_9
 (25 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, hypo_part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
@@ -1191,8 +1193,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id 
 (13 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
-                       QUERY PLAN                        
----------------------------------------------------------
+                          QUERY PLAN                           
+---------------------------------------------------------------
  Append
    ->  Hash Join
          Hash Cond: (hypo_part_hash_0.id = t1.id)
@@ -1200,35 +1202,35 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = 
          ->  Hash
                ->  Seq Scan on part_hash_0 t1
    ->  Hash Join
-         Hash Cond: (hypo_part_hash_1.id = t1_1.id)
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_1
+         Hash Cond: (t1_1.id = hypo_part_hash_1.id)
+         ->  Seq Scan on part_hash_1 t1_1
          ->  Hash
-               ->  Seq Scan on part_hash_1 t1_1
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_1
    ->  Hash Join
-         Hash Cond: (hypo_part_hash_2.id = t1_2.id)
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_2
+         Hash Cond: (t1_2.id = hypo_part_hash_2.id)
+         ->  Seq Scan on part_hash_2 t1_2
          ->  Hash
-               ->  Seq Scan on part_hash_2 t1_2
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_2
    ->  Hash Join
          Hash Cond: (hypo_part_hash_3.id = t1_3.id)
          ->  Seq Scan on hypo_part_hash hypo_part_hash_3
          ->  Hash
                ->  Seq Scan on part_hash_3 t1_3
    ->  Hash Join
-         Hash Cond: (hypo_part_hash_4.id = t1_4.id)
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_4
+         Hash Cond: (t1_4.id = hypo_part_hash_4.id)
+         ->  Seq Scan on part_hash_4 t1_4
          ->  Hash
-               ->  Seq Scan on part_hash_4 t1_4
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_4
    ->  Hash Join
          Hash Cond: (hypo_part_hash_5.id = t1_5.id)
          ->  Seq Scan on hypo_part_hash hypo_part_hash_5
          ->  Hash
                ->  Seq Scan on part_hash_5 t1_5
    ->  Hash Join
-         Hash Cond: (hypo_part_hash_6.id = t1_6.id)
-         ->  Seq Scan on hypo_part_hash hypo_part_hash_6
+         Hash Cond: (t1_6.id = hypo_part_hash_6.id)
+         ->  Seq Scan on part_hash_6 t1_6
          ->  Hash
-               ->  Seq Scan on part_hash_6 t1_6
+               ->  Seq Scan on hypo_part_hash hypo_part_hash_6
    ->  Hash Join
          Hash Cond: (hypo_part_hash_7.id = t1_7.id)
          ->  Seq Scan on hypo_part_hash hypo_part_hash_7
@@ -1318,14 +1320,14 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = 42;
 -- =====================
 -- simple UPDATE and DELETE on hypothetically partitioned table
 EXPLAIN (COSTS OFF) UPDATE hypo_part_range set id = id;
-ERROR:  hypopg: UPDATE and DELETE on hypothetical partitioned tables are not supported
+ERROR:  hypopg: UPDATE and DELETE on hypothetically partitioned tables are not supported
 EXPLAIN DELETE FROM hypo_part_range WHERE id = 42;
-ERROR:  hypopg: UPDATE and DELETE on hypothetical partitioned tables are not supported
+ERROR:  hypopg: UPDATE and DELETE on hypothetically partitioned tables are not supported
 -- UPDATE and DELETE on hypothetically partitioned table inside CTE
 EXPLAIN (COSTS OFF) WITH s AS (UPDATE hypo_part_range set id = id returning *) SELECT 1;
-ERROR:  hypopg: UPDATE and DELETE on hypothetical partitioned tables are not supported
+ERROR:  hypopg: UPDATE and DELETE on hypothetically partitioned tables are not supported
 EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM hypo_part_range WHERE id = 42 returning *) SELECT 1;
-ERROR:  hypopg: UPDATE and DELETE on hypothetical partitioned tables are not supported
+ERROR:  hypopg: UPDATE and DELETE on hypothetically partitioned tables are not supported
 -- UPDATE and DELETE involving hypothetically partitioned table, but on regular
 -- tables
 CREATE TABLE foo(id integer);
