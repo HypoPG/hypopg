@@ -464,8 +464,10 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 			    bool inhparent,
 			    RelOptInfo *rel)
 {
-	bool  hypopart = false;
 	Relation	relation;
+#if PG_VERSION_NUM >= 100000
+	bool  hypopart = false;
+#endif
 
 	if (HYPO_ENABLED())
 	{
