@@ -117,6 +117,7 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_q4', 'PARTITION OF
 VACUUM ANALYZE;
 SELECT * FROM hypopg_analyze('hypo_part_range',100);
 SELECT * FROM hypopg_analyze('hypo_part_list',100);
+SELECT * FROM hypopg_analyze('hypo_part_hash',100);
 SELECT * FROM hypopg_analyze('hypo_part_multi',100);
 
 

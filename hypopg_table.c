@@ -1996,22 +1996,25 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	}
 
 	/*
-	 * If this rel is partitioned by hash, we should rewrite the rel->pages
-	 * and the rel->pages here according to the number of partitions.
+	 * If this rel is a partition, we will estimate pages and tuples according
+	 * to its partition bound and root table's pages and tuples.
 	 *
-	 * If this rel is partitioned list or range, we add the partition constraints
-	 * to the rte->securityQuals so that the rel->rows is computed correctly at
-	 * the set_baserel_size_estimates(). We shouldn't rewrite the rel->pages
-	 * and the rel->tuples here, because they will be rewritten at the later hook.
+	 * In the case of RANGE/LIST partitioning, we will compute selectivity
+	 * according to the partition constraints including its ancestors'.
+	 * On the other hand, in the case of HASH partitioning, we will multiply
+	 * the number of partitions including its ancestors'.  After that we will
+	 * compute pages and tuples using the selectivity and the product of the
+	 * number of partitions.
 	 */
 	if (rel->reloptkind != RELOPT_BASEREL
 		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
-		Oid partoid;
+		Oid partoid, parentid;
 		hypoTable *part;
 		RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
 		Selectivity selectivity;
 		double pages;
+		int nparts = 1;
 
 		Assert(rte->values_lists);
 		partoid = linitial_oid(rte->values_lists);
@@ -2039,9 +2042,23 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 							root)->values_lists), false)->tablename,
 				selectivity);
 
-		pages = ceil(rel->pages * selectivity);
+		/* retrieve the all its ancestors' nparts and multiply them */
+		parentid = part->parentid;
+		do
+		{
+			hypoTable *parent = hypo_find_table(parentid, false);
+			if (parent->partkey->strategy == PARTITION_STRATEGY_HASH)
+			{
+				PartitionDesc partdesc = hypo_generate_partitiondesc(parent);
+				nparts *= partdesc->nparts;
+			}
+			parentid = parent->parentid;
+		} while (OidIsValid(parentid));
+
+		/* compute pages and tuples using selectivity and nparts */
+		pages = ceil(rel->pages * selectivity / nparts);
 		rel->pages = (BlockNumber) pages;
-		rel->tuples = clamp_row_est(rel->tuples * selectivity);
+		rel->tuples = clamp_row_est(rel->tuples * selectivity / nparts);
 	}
 
 	/*
@@ -2191,7 +2208,8 @@ hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec)
 
 	case PARTITION_STRATEGY_HASH:
 		Assert(spec->strategy == PARTITION_STRATEGY_HASH);
-		my_qual = hypo_get_qual_for_hash(parent, spec);
+		//my_qual = hypo_get_qual_for_hash(parent, spec);
+		/* Do not add the list */
 		break;
 
 	case PARTITION_STRATEGY_LIST:

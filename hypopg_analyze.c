@@ -43,6 +43,7 @@
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #if PG_VERSION_NUM >= 100000
+#include "utils/partcache.h"
 #include "utils/ruleutils.h"
 #endif
 #include "utils/selfuncs.h"
@@ -567,6 +568,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	if (isnan(fraction) || fraction == get_float4_infinity()
 			|| fraction <= 0 || fraction > 100)
 		elog(ERROR, "hypopg: invalid fraction: %f", fraction);
+
+	if (root_entry->partkey->strategy == PARTITION_STRATEGY_HASH)
+		elog(ERROR, "hypopg: hypopg_analyze() on hypothetical hash partitioning is not supported");
 
 	/* Connect to SPI manager */
 	if ((ret = SPI_connect()) < 0)
