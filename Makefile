@@ -3,7 +3,8 @@ EXTVERSION   = $(shell grep default_version $(EXTENSION).control | sed -e "s/def
 TESTS        = $(wildcard test/sql/*.sql)
 REGRESS      = hypo_setup \
 	       hypo_index \
-	       hypo_table
+	       hypo_table \
+	       hypo_index_table
 
 REGRESS_OPTS = --inputdir=test
 
