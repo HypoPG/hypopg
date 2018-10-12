@@ -221,6 +221,21 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 	Assert(hypoStatsHash);
 
 	/*
+	 * We can't use the same heuristics for hash partitions selectivity
+	 * estimation, because its constraint is using satisfies_hash_partition(),
+	 * for which the selectivity estimation won't have any knowledge and will
+	 * therefore apply some default selectivty which will be totally wrong.
+	 * Instead, we'll just compute the selectivity of hash partitions using the
+	 * modulus, so don't bother computing and storing statistics;
+	 */
+	if (part->boundspec->strategy == PARTITION_STRATEGY_HASH)
+	{
+		elog(NOTICE, "hypothetical partition \"%s\" is a hash partition,"
+				" skipping", part->tablename);
+		return;
+	}
+
+	/*
 	 * Set up a working context so that we can easily free whatever junk gets
 	 * created.
 	 */
@@ -568,9 +583,6 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	if (isnan(fraction) || fraction == get_float4_infinity()
 			|| fraction <= 0 || fraction > 100)
 		elog(ERROR, "hypopg: invalid fraction: %f", fraction);
-
-	if (root_entry->partkey->strategy == PARTITION_STRATEGY_HASH)
-		elog(ERROR, "hypopg: hypopg_analyze() on hypothetical hash partitioning is not supported");
 
 	/* Connect to SPI manager */
 	if ((ret = SPI_connect()) < 0)

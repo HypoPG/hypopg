@@ -328,7 +328,21 @@ SELECT * FROM hypopg_analyze('hypo_part_list',100);
 (1 row)
 
 SELECT * FROM hypopg_analyze('hypo_part_hash',100);
-ERROR:  hypopg: hypopg_analyze() on hypothetical hash partitioning is not supported
+NOTICE:  hypothetical partition "hypo_part_hash_9" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_8" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_7" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_6" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_5" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_4" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_3" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_2" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_1" is a hash partition, skipping
+NOTICE:  hypothetical partition "hypo_part_hash_0" is a hash partition, skipping
+ hypopg_analyze 
+----------------
+ 
+(1 row)
+
 SELECT * FROM hypopg_analyze('hypo_part_multi',100);
  hypopg_analyze 
 ----------------
