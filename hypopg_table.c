@@ -2008,12 +2008,12 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	if (rel->reloptkind != RELOPT_BASEREL
 		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
-		Oid partoid, parentid;
-		hypoTable *part;
+		Oid partoid;
+		hypoTable *part, *cur_part;
 		RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
 		Selectivity selectivity;
 		double pages;
-		int nparts = 1;
+		int total_modulus = 1;
 
 		Assert(rte->values_lists);
 		partoid = linitial_oid(rte->values_lists);
@@ -2041,23 +2041,34 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 							root)->values_lists), false)->tablename,
 				selectivity);
 
-		/* retrieve the all its ancestors' nparts and multiply them */
-		parentid = part->parentid;
-		do
+		/*
+		 * Selectivity for hash partitions cannot be done using the standard
+		 * clauselist_selectivity(), because the underlying constraint is using
+		 * the satisfies_hash_partition() function, for which we won't be able
+		 * to get sensible estimation.  Instead, compute a fraction based on
+		 * this partition modulus, multiplied by all its hash partitions'
+		 * ancestor modulus if any and use it to correct the estimation we find
+		 * for all non-hash partitions
+		 */
+		cur_part = part;
+		for(;;)
 		{
-			hypoTable *parent = hypo_find_table(parentid, false);
-			if (parent->partkey->strategy == PARTITION_STRATEGY_HASH)
-			{
-				PartitionDesc partdesc = hypo_generate_partitiondesc(parent);
-				nparts *= partdesc->nparts;
-			}
-			parentid = parent->parentid;
-		} while (OidIsValid(parentid));
+			if (cur_part->boundspec->strategy == PARTITION_STRATEGY_HASH)
+				total_modulus *= cur_part->boundspec->modulus;
 
-		/* compute pages and tuples using selectivity and nparts */
-		pages = ceil(rel->pages * selectivity / nparts);
+			cur_part = hypo_find_table(cur_part->parentid, false);
+
+			/* exit when we find the root partition */
+			if (!OidIsValid(cur_part->parentid))
+				break;
+		}
+		elog(DEBUG1, "hypopg: total modulus for partition %s: %d",
+				part->tablename, total_modulus);
+
+		/* compute pages and tuples using selectivity and total_modulus */
+		pages = ceil(rel->pages * selectivity / total_modulus);
 		rel->pages = (BlockNumber) pages;
-		rel->tuples = clamp_row_est(rel->tuples * selectivity / nparts);
+		rel->tuples = clamp_row_est(rel->tuples * selectivity / total_modulus);
 	}
 
 	/*
