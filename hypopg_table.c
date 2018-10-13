@@ -106,7 +106,6 @@ static PartitionBoundSpec *hypo_transformPartitionBound(ParseState *pstate,
 		hypoTable *parent, PartitionBoundSpec *spec);
 static void hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 				 hypoTable *entry);
-static List *hypo_get_qual_for_hash(hypoTable *parent, PartitionBoundSpec *spec);
 static List *hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec);
 static List *hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec,
 									 bool for_default);
@@ -2208,8 +2207,11 @@ hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec)
 
 	case PARTITION_STRATEGY_HASH:
 		Assert(spec->strategy == PARTITION_STRATEGY_HASH);
-		//my_qual = hypo_get_qual_for_hash(parent, spec);
-		/* Do not add the list */
+		/*
+		 * Do not add the qual for hash partitioning, see comment in
+		 * hypo_injectHypotheticalPartitioning about hash partitioning
+		 * selectivity estimation
+		 */
 		break;
 
 	case PARTITION_STRATEGY_LIST:
@@ -2229,88 +2231,6 @@ hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec)
 
 	return my_qual;
 }
-
-
-/*
- * Returns a CHECK constraint expression to use as a hash partition's
- * constraint, given the parent entry and partition bound structure.
- *
- * Heavily inspired on get_qual_for_hash
- */
-static List *
-hypo_get_qual_for_hash(hypoTable *parent, PartitionBoundSpec *spec)
-{
-	PartitionKey key = parent->partkey;
-	FuncExpr   *fexpr;
-	Node	   *relidConst;
-	Node	   *modulusConst;
-	Node	   *remainderConst;
-	List	   *args;
-	ListCell   *partexprs_item;
-	int			i;
-
-	/* Fixed arguments. */
-	relidConst = (Node *) makeConst(OIDOID,
-									-1,
-									InvalidOid,
-									sizeof(Oid),
-									ObjectIdGetDatum(parent->oid), //parentid?
-									false,
-									true);
-
-	modulusConst = (Node *) makeConst(INT4OID,
-									  -1,
-									  InvalidOid,
-									  sizeof(int32),
-									  Int32GetDatum(spec->modulus),
-									  false,
-									  true);
-
-	remainderConst = (Node *) makeConst(INT4OID,
-										-1,
-										InvalidOid,
-										sizeof(int32),
-										Int32GetDatum(spec->remainder),
-										false,
-										true);
-
-	args = list_make3(relidConst, modulusConst, remainderConst);
-	partexprs_item = list_head(key->partexprs);
-
-	/* Add an argument for each key column. */
-	for (i = 0; i < key->partnatts; i++)
-	{
-		Node	   *keyCol;
-
-		/* Left operand */
-		if (key->partattrs[i] != 0)
-		{
-			keyCol = (Node *) makeVar(1,
-									  key->partattrs[i],
-									  key->parttypid[i],
-									  key->parttypmod[i],
-									  key->parttypcoll[i],
-									  0);
-		}
-		else
-		{
-			keyCol = (Node *) copyObject(lfirst(partexprs_item));
-			partexprs_item = lnext(partexprs_item);
-		}
-
-		args = lappend(args, keyCol);
-	}
-
-	fexpr = makeFuncExpr(F_SATISFIES_HASH_PARTITION,
-						 BOOLOID,
-						 args,
-						 InvalidOid,
-						 InvalidOid,
-						 COERCE_EXPLICIT_CALL);
-
-	return list_make1(fexpr);
-}
-
 
 
 /*
