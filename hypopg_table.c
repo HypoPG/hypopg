@@ -187,7 +187,7 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 		Assert(parent_rti == -1);
 
 		rte->relkind = RELKIND_PARTITIONED_TABLE;
-		rte->inh = true;
+		rte->inh = (nparts > 0);
 		HYPO_TAG_RTI(rel->relid, root);
 	}
 	else /* branch partition, expand it */
@@ -199,12 +199,15 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 		if(!rte->alias)
 			rte->alias = makeNode(Alias);
 		rte->alias->aliasname = branch->tablename;
+		rte->inh = (nparts > 0);
 
 		hypo_expand_single_inheritance_child(root, relationObjectId, rel,
 				parentrel, branch, rte, branch, firstpos, parent_rti, true);
 
 		firstpos++;
 	}
+
+	Assert(rte->inh == (nparts > 0));
 
 	/* add the partitioned table itself */
 	root->simple_rte_array[firstpos] = rte;
@@ -213,6 +216,13 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 			root->simple_rte_array[firstpos]);
 
 	HYPO_TAG_RTI(firstpos, root);
+
+	/*
+	 * if the table has no partition, we need to tell caller than it has to use
+	 * the new position
+	 */
+	if (nparts == 0)
+		return firstpos + 1;
 
 	/*
 	 * create RangeTblEntries and AppendRelInfos hypothetically
@@ -2021,9 +2031,10 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 
 		/*
 		 * there's no need to estimate branch partitions pages and tuples, but
-		 * we have to setup their partitioning data
+		 * we have to setup their partitioning data if the partition has
+		 * children
 		 */
-		if (part->partkey)
+		if (part->partkey && rte->inh)
 		{
 			hypo_set_relation_partition_info(root, rel, part);
 			return;

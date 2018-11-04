@@ -56,8 +56,7 @@ INSERT INTO part_multi select (i%3)+1, '2015-01-01'::date + interval '1 day' * (
 -- Hypothetical tables
 -- -------------------
 -- 0. Dropping any hypothetical object
-SELECT * FROM hypopg_reset_index();
-SELECT * FROM hypopg_reset_table();
+SELECT * FROM hypopg_reset();
 -- 1. Range partition
 DROP TABLE IF EXISTS hypo_part_range;
 CREATE TABLE hypo_part_range (id integer, val text);
@@ -263,3 +262,26 @@ EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from part_range WHERE foo.i
 EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING hypo_part_range WHERE foo.id = hypo_part_range.id AND hypo_part_range.id = 42 RETURNING *) SELECT 1;
 -- same but with real table
 EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING part_range WHERE foo.id = part_range.id AND part_range.id = 42 RETURNING *) SELECT 1;
+
+-- childless partitioning
+-- ======================
+SELECT * FROM hypopg_reset();
+DROP TABLE part_multi CASCADE;
+
+CREATE TABLE part_multi(dpt smallint, dt date, val text) PARTITION BY LIST (dpt);
+SELECT * FROM hypopg_partition_table('hypo_part_multi', 'PARTITION BY LIST (dpt)');
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
+
+CREATE TABLE part_multi_2 PARTITION OF part_multi FOR VALUES IN (2) PARTITION BY RANGE(dt);
+CREATE TABLE part_multi_2_q1 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$);
+CREATE TABLE part_multi_1 PARTITION OF part_multi FOR VALUES IN (1) PARTITION BY RANGE(dt);
+CREATE TABLE part_multi_1_q1 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$) PARTITION BY RANGE (dt);
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2', 'PARTITION OF hypo_part_multi FOR VALUES IN (2)', 'PARTITION BY RANGE(dt)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_q1', 'PARTITION OF hypo_part_multi_2 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1', 'PARTITION OF hypo_part_multi FOR VALUES IN (1)', 'PARTITION BY RANGE(dt)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)','PARTITION BY RANGE (dt)');
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
