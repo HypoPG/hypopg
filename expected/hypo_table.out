@@ -1411,7 +1411,7 @@ SELECT * FROM hypopg_reset();
  
 (1 row)
 
-DROP TABLE part_multi CASCADE;
+DROP TABLE part_multi;
 CREATE TABLE part_multi(dpt smallint, dt date, val text) PARTITION BY LIST (dpt);
 SELECT * FROM hypopg_partition_table('hypo_part_multi', 'PARTITION BY LIST (dpt)');
  hypopg_partition_table 
@@ -1475,3 +1475,79 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
    ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
 (2 rows)
 
+-- removing hypothetical partitions
+-- ================================
+CREATE TABLE part_multi_1_q1_b PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$);
+CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_b', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$)');
+       tablename        
+------------------------
+ hypo_part_multi_1_q1_b
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
+       tablename        
+------------------------
+ hypo_part_multi_1_q1_a
+(1 row)
+
+DROP TABLE part_multi_1_q1_a;
+SELECT hypopg_drop_table(relid) FROM hypopg_table() WHERE tablename = 'hypo_part_multi_1_q1_a';
+ hypopg_drop_table 
+-------------------
+ 
+(1 row)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
+             QUERY PLAN              
+-------------------------------------
+ Append
+   ->  Seq Scan on part_multi_1_q1_b
+   ->  Seq Scan on part_multi_2_q1
+(3 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Append
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_1_q1_b
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
+(3 rows)
+
+DROP TABLE part_multi_1;
+SELECT hypopg_drop_table(relid) FROM hypopg_table() WHERE tablename = 'hypo_part_multi_1';
+ hypopg_drop_table 
+-------------------
+ 
+(1 row)
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
+            QUERY PLAN             
+-----------------------------------
+ Append
+   ->  Seq Scan on part_multi_2_q1
+(2 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Append
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
+(2 rows)
+
+SELECT hypopg_drop_table(relid) FROM hypopg_table() WHERE tablename = 'hypo_part_multi';
+ hypopg_drop_table 
+-------------------
+ 
+(1 row)
+
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
+         QUERY PLAN          
+-----------------------------
+ Seq Scan on hypo_part_multi
+(1 row)
+
+SELECT hypopg_drop_table(oid) FROM pg_class WHERE relname = 'pg_class';
+ERROR:  hypopg: Oid 1259 is not a hypothetically partitioned table
+SELECT hypopg_drop_table(1);
+ERROR:  hypopg: Oid 1 is not a hypothetically partitioned table

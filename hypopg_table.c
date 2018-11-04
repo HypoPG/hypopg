@@ -3210,6 +3210,10 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	/* Process any pending invalidation */
 	hypo_process_inval();
 
+	if (!hypo_table_oid_is_hypothetical(tableid))
+		elog(ERROR, "hypopg: Oid %d is not a hypothetically partitioned table",
+				tableid);
+
 	PG_RETURN_BOOL(hypo_table_remove(tableid, true));
 #endif
 }

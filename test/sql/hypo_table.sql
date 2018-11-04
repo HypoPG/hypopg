@@ -266,7 +266,7 @@ EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING part_range WHERE foo.id = p
 -- childless partitioning
 -- ======================
 SELECT * FROM hypopg_reset();
-DROP TABLE part_multi CASCADE;
+DROP TABLE part_multi;
 
 CREATE TABLE part_multi(dpt smallint, dt date, val text) PARTITION BY LIST (dpt);
 SELECT * FROM hypopg_partition_table('hypo_part_multi', 'PARTITION BY LIST (dpt)');
@@ -285,3 +285,29 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1', 'PARTITION OF
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
+
+-- removing hypothetical partitions
+-- ================================
+CREATE TABLE part_multi_1_q1_b PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$);
+CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_b', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
+
+DROP TABLE part_multi_1_q1_a;
+SELECT hypopg_drop_table(relid) FROM hypopg_table() WHERE tablename = 'hypo_part_multi_1_q1_a';
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
+
+DROP TABLE part_multi_1;
+SELECT hypopg_drop_table(relid) FROM hypopg_table() WHERE tablename = 'hypo_part_multi_1';
+
+EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
+
+SELECT hypopg_drop_table(relid) FROM hypopg_table() WHERE tablename = 'hypo_part_multi';
+
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
+
+SELECT hypopg_drop_table(oid) FROM pg_class WHERE relname = 'pg_class';
+SELECT hypopg_drop_table(1);

@@ -92,6 +92,11 @@ CREATE FUNCTION hypopg_reset_table()
     LANGUAGE C VOLATILE COST 100
 AS '$libdir/hypopg', 'hypopg_reset_table';
 
+CREATE FUNCTION hypopg_drop_table(IN relid oid)
+    RETURNS void
+    LANGUAGE C VOLATILE COST 100
+AS '$libdir/hypopg', 'hypopg_drop_table';
+
 CREATE FUNCTION hypopg_table(OUT relid oid, OUT tablename text,
     OUT parentid oid, OUT rootid oid,
     OUT partition_by_clause text, OUT partition_bounds text)
