@@ -1478,6 +1478,8 @@ hypo_newTable(Oid parentid)
 	entry = (hypoTable *) palloc0(sizeof(hypoTable));
 
 	entry->tablename = palloc0(NAMEDATALEN);
+	entry->set_tuples = false; /* wil be generated later if needed */
+	entry->tuples = 0; /* wil be generated later if needed */
 	entry->boundspec = NULL; /* wil be generated later if needed */
 	entry->partkey = NULL; /* wil be generated later if needed */
 

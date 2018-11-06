@@ -40,6 +40,8 @@ typedef struct hypoTable
 	char	   *tablename;		/* hypothetical partition name, or original
 								   table name for root parititon */
 	Oid			namespace;		/* Oid of the hypothetical table's schema */
+	bool		set_tuples;		/* tuples are already set or not */
+	int			tuples;		    /* number of tuples of this table */
 
 	/* added for internal use */
 	PartitionBoundSpec	*boundspec;	/* Needed to generate the PartitionDesc and
