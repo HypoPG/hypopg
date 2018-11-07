@@ -42,6 +42,7 @@ CREATE TABLE part_multi_2_q1 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-0
 CREATE TABLE part_multi_2_q2 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
 CREATE TABLE part_multi_2_q3 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
 CREATE TABLE part_multi_2_q4 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
+CREATE TABLE part_multi_2_def PARTITION OF part_multi_2 DEFAULT;
 CREATE TABLE part_multi_1 PARTITION OF part_multi FOR VALUES IN (1) PARTITION BY RANGE(dt);
 CREATE TABLE part_multi_1_q2 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
 CREATE TABLE part_multi_1_q3 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
@@ -49,12 +50,20 @@ CREATE TABLE part_multi_1_q4 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-1
 CREATE TABLE part_multi_1_q1 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$) PARTITION BY RANGE (dt);
 CREATE TABLE part_multi_1_q1_b PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$);
 CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
+CREATE TABLE part_multi_1_def PARTITION OF part_multi_1 DEFAULT;
 CREATE TABLE part_multi_3 PARTITION OF part_multi FOR VALUES IN (3) PARTITION BY RANGE(dt);
 CREATE TABLE part_multi_3_q1 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$);
 CREATE TABLE part_multi_3_q2 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
 CREATE TABLE part_multi_3_q3 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
 CREATE TABLE part_multi_3_q4 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
-INSERT INTO part_multi select (i%3)+1, '2015-01-01'::date + interval '1 day' * (i%365), 'val ' || i FROM generate_series(1,10000) i;
+CREATE TABLE part_multi_3_def PARTITION OF part_multi_3 DEFAULT;
+CREATE TABLE part_multi_def PARTITION OF part_multi DEFAULT PARTITION BY RANGE(dt);
+CREATE TABLE part_multi_def_q1 PARTITION OF part_multi_def FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$);
+CREATE TABLE part_multi_def_q2 PARTITION OF part_multi_def FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
+CREATE TABLE part_multi_def_q3 PARTITION OF part_multi_def FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
+CREATE TABLE part_multi_def_q4 PARTITION OF part_multi_def FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
+CREATE TABLE part_multi_def_def PARTITION OF part_multi_def DEFAULT;
+INSERT INTO part_multi select (i%4)+1, '2015-01-01'::date + interval '1 day' * (i%500), 'val ' || i FROM generate_series(1,50000) i;
 -- Hypothetical tables
 -- -------------------
 -- 0. Dropping any hypothetical object
@@ -197,7 +206,7 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0', 'PARTITION OF hyp
 DROP TABLE IF EXISTS hypo_part_multi;
 NOTICE:  table "hypo_part_multi" does not exist, skipping
 CREATE TABLE hypo_part_multi(dpt smallint, dt date, val text);
-INSERT INTO hypo_part_multi select (i%3)+1, '2015-01-01'::date + interval '1 day' * (i%365), 'val ' || i FROM generate_series(1,10000) i;
+INSERT INTO hypo_part_multi select (i%4)+1, '2015-01-01'::date + interval '1 day' * (i%500), 'val ' || i FROM generate_series(1,50000) i;
 SELECT * FROM hypopg_partition_table('hypo_part_multi', 'PARTITION BY LIST (dpt)');
  hypopg_partition_table 
 ------------------------
@@ -232,6 +241,12 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_q4', 'PARTITION OF
       tablename       
 ----------------------
  hypo_part_multi_2_q4
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_def', 'PARTITION OF hypo_part_multi_2 DEFAULT');
+       tablename       
+-----------------------
+ hypo_part_multi_2_def
 (1 row)
 
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1', 'PARTITION OF hypo_part_multi FOR VALUES IN (1)', 'PARTITION BY RANGE(dt)');
@@ -276,6 +291,12 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a', 'PARTITION 
  hypo_part_multi_1_q1_a
 (1 row)
 
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_def', 'PARTITION OF hypo_part_multi_1 DEFAULT');
+       tablename       
+-----------------------
+ hypo_part_multi_1_def
+(1 row)
+
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3', 'PARTITION OF hypo_part_multi FOR VALUES IN (3)', 'PARTITION BY RANGE(dt)');
      tablename     
 -------------------
@@ -304,6 +325,48 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_q4', 'PARTITION OF
       tablename       
 ----------------------
  hypo_part_multi_3_q4
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_def', 'PARTITION OF hypo_part_multi_3 DEFAULT');
+       tablename       
+-----------------------
+ hypo_part_multi_3_def
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def', 'PARTITION OF hypo_part_multi DEFAULT' ,'PARTITION BY RANGE(dt)');
+      tablename      
+---------------------
+ hypo_part_multi_def
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_q1', 'PARTITION OF hypo_part_multi_def FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)');
+       tablename        
+------------------------
+ hypo_part_multi_def_q1
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_q2', 'PARTITION OF hypo_part_multi_def FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$)');
+       tablename        
+------------------------
+ hypo_part_multi_def_q2
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_q3', 'PARTITION OF hypo_part_multi_def FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$)');
+       tablename        
+------------------------
+ hypo_part_multi_def_q3
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_q4', 'PARTITION OF hypo_part_multi_def FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$)');
+       tablename        
+------------------------
+ hypo_part_multi_def_q4
+(1 row)
+
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_def', 'PARTITION OF hypo_part_multi_def DEFAULT');
+        tablename        
+-------------------------
+ hypo_part_multi_def_def
 (1 row)
 
 -- Maintenance
@@ -376,6 +439,7 @@ FROM hypopg_table();
  f       | hypo_part_multi_2_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
  f       | hypo_part_multi_2_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
  f       | hypo_part_multi_2_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
+ f       | hypo_part_multi_2_def       | f                | t                    |                            | DEFAULT
  f       | hypo_part_multi_1           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('1')
  f       | hypo_part_multi_1_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
  f       | hypo_part_multi_1_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
@@ -383,12 +447,20 @@ FROM hypopg_table();
  f       | hypo_part_multi_1_q1        | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
  f       | hypo_part_multi_1_q1_b      | f                | t                    |                            | FOR VALUES FROM ('02-01-2015') TO ('04-01-2015')
  f       | hypo_part_multi_1_q1_a      | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('02-01-2015')
+ f       | hypo_part_multi_1_def       | f                | t                    |                            | DEFAULT
  f       | hypo_part_multi_3           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('3')
  f       | hypo_part_multi_3_q1        | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
  f       | hypo_part_multi_3_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
  f       | hypo_part_multi_3_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
  f       | hypo_part_multi_3_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
-(37 rows)
+ f       | hypo_part_multi_3_def       | f                | t                    |                            | DEFAULT
+ f       | hypo_part_multi_def         | f                | t                    | PARTITION BY RANGE (dt)    | DEFAULT
+ f       | hypo_part_multi_def_q1      | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
+ f       | hypo_part_multi_def_q2      | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
+ f       | hypo_part_multi_def_q3      | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
+ f       | hypo_part_multi_def_q4      | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
+ f       | hypo_part_multi_def_def     | f                | t                    |                            | DEFAULT
+(46 rows)
 
 -- Test hypothetical partitioning behavior
 -- =======================================
@@ -529,27 +601,35 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash WHERE id < 15000;
 
 -- 4. Multi level range
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
-             QUERY PLAN              
--------------------------------------
+              QUERY PLAN              
+--------------------------------------
  Append
    ->  Seq Scan on part_multi_1_q1_a
    ->  Seq Scan on part_multi_1_q1_b
    ->  Seq Scan on part_multi_1_q2
    ->  Seq Scan on part_multi_1_q3
    ->  Seq Scan on part_multi_1_q4
+   ->  Seq Scan on part_multi_1_def
    ->  Seq Scan on part_multi_2_q1
    ->  Seq Scan on part_multi_2_q2
    ->  Seq Scan on part_multi_2_q3
    ->  Seq Scan on part_multi_2_q4
+   ->  Seq Scan on part_multi_2_def
    ->  Seq Scan on part_multi_3_q1
    ->  Seq Scan on part_multi_3_q2
    ->  Seq Scan on part_multi_3_q3
    ->  Seq Scan on part_multi_3_q4
-(14 rows)
+   ->  Seq Scan on part_multi_3_def
+   ->  Seq Scan on part_multi_def_q1
+   ->  Seq Scan on part_multi_def_q2
+   ->  Seq Scan on part_multi_def_q3
+   ->  Seq Scan on part_multi_def_q4
+   ->  Seq Scan on part_multi_def_def
+(22 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi WHERE dpt = 2;
-            QUERY PLAN             
------------------------------------
+             QUERY PLAN             
+------------------------------------
  Append
    ->  Seq Scan on part_multi_2_q1
          Filter: (dpt = 2)
@@ -559,7 +639,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi WHERE dpt = 2;
          Filter: (dpt = 2)
    ->  Seq Scan on part_multi_2_q4
          Filter: (dpt = 2)
-(9 rows)
+   ->  Seq Scan on part_multi_2_def
+         Filter: (dpt = 2)
+(11 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi WHERE dt >= '2015-01-05' AND dt < '2015-01-10';
                                  QUERY PLAN                                 
@@ -567,11 +649,21 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi WHERE dt >= '2015-01-05' AND dt < '
  Append
    ->  Seq Scan on part_multi_1_q1_a
          Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+   ->  Seq Scan on part_multi_1_def
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
    ->  Seq Scan on part_multi_2_q1
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+   ->  Seq Scan on part_multi_2_def
          Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
    ->  Seq Scan on part_multi_3_q1
          Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
-(7 rows)
+   ->  Seq Scan on part_multi_3_def
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+   ->  Seq Scan on part_multi_def_q1
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+   ->  Seq Scan on part_multi_def_def
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+(17 rows)
 
 -- Hypothetical tables
 -- -------------------
@@ -708,27 +800,35 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash WHERE id < 15000;
 
 -- 4. Multi level range
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
-                        QUERY PLAN                        
-----------------------------------------------------------
+                        QUERY PLAN                         
+-----------------------------------------------------------
  Append
    ->  Seq Scan on hypo_part_multi hypo_part_multi_1_q1_a
    ->  Seq Scan on hypo_part_multi hypo_part_multi_1_q1_b
    ->  Seq Scan on hypo_part_multi hypo_part_multi_1_q2
    ->  Seq Scan on hypo_part_multi hypo_part_multi_1_q3
    ->  Seq Scan on hypo_part_multi hypo_part_multi_1_q4
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_1_def
    ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
    ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q2
    ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q3
    ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q4
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_2_def
    ->  Seq Scan on hypo_part_multi hypo_part_multi_3_q1
    ->  Seq Scan on hypo_part_multi hypo_part_multi_3_q2
    ->  Seq Scan on hypo_part_multi hypo_part_multi_3_q3
    ->  Seq Scan on hypo_part_multi hypo_part_multi_3_q4
-(14 rows)
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_3_def
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_def_q1
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_def_q2
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_def_q3
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_def_q4
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_def_def
+(22 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi WHERE dpt = 2;
-                       QUERY PLAN                       
---------------------------------------------------------
+                       QUERY PLAN                        
+---------------------------------------------------------
  Append
    ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
          Filter: (dpt = 2)
@@ -738,7 +838,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi WHERE dpt = 2;
          Filter: (dpt = 2)
    ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q4
          Filter: (dpt = 2)
-(9 rows)
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_2_def
+         Filter: (dpt = 2)
+(11 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi WHERE dt >= '2015-01-05' AND dt < '2015-01-10';
                                  QUERY PLAN                                 
@@ -746,11 +848,21 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi WHERE dt >= '2015-01-05' AND d
  Append
    ->  Seq Scan on hypo_part_multi hypo_part_multi_1_q1_a
          Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_1_def
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
    ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_2_def
          Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
    ->  Seq Scan on hypo_part_multi hypo_part_multi_3_q1
          Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
-(7 rows)
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_3_def
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_def_q1
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+   ->  Seq Scan on hypo_part_multi hypo_part_multi_def_def
+         Filter: ((dt >= '01-05-2015'::date) AND (dt < '01-10-2015'::date))
+(17 rows)
 
 -- Join queries
 -- ------------
@@ -822,8 +934,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, part_hash t2 WHERE t1.id = t2.id
 (25 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
-                     QUERY PLAN                     
-----------------------------------------------------
+                     QUERY PLAN                      
+-----------------------------------------------------
  Nested Loop
    ->  Append
          ->  Seq Scan on part_multi_2_q1 t1
@@ -833,6 +945,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, part_multi t2 WHERE t1.dpt = t2
          ->  Seq Scan on part_multi_2_q3 t1_2
                Filter: (dpt = 2)
          ->  Seq Scan on part_multi_2_q4 t1_3
+               Filter: (dpt = 2)
+         ->  Seq Scan on part_multi_2_def t1_4
                Filter: (dpt = 2)
    ->  Materialize
          ->  Append
@@ -844,7 +958,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, part_multi t2 WHERE t1.dpt = t2
                      Filter: (dpt = 2)
                ->  Seq Scan on part_multi_2_q4 t2_3
                      Filter: (dpt = 2)
-(20 rows)
+               ->  Seq Scan on part_multi_2_def t2_4
+                     Filter: (dpt = 2)
+(24 rows)
 
 -- 2. Hypothetical tables
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
@@ -912,8 +1028,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash t1, hypo_part_hash t2 WHERE t1.
 (25 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi t1, hypo_part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
-                              QUERY PLAN                              
-----------------------------------------------------------------------
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
  Nested Loop
    ->  Append
          ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q1
@@ -923,6 +1039,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi t1, hypo_part_multi t2 WHERE t
          ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q3
                Filter: (dpt = 2)
          ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q4
+               Filter: (dpt = 2)
+         ->  Seq Scan on hypo_part_multi hypo_part_multi_2_def
                Filter: (dpt = 2)
    ->  Materialize
          ->  Append
@@ -934,7 +1052,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi t1, hypo_part_multi t2 WHERE t
                      Filter: (dpt = 2)
                ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q4_1
                      Filter: (dpt = 2)
-(20 rows)
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_def_1
+                     Filter: (dpt = 2)
+(24 rows)
 
 -- 3. Real tables and hypothetical tables
 EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
@@ -1002,8 +1122,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = 
 (25 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, hypo_part_multi t2 WHERE t1.dpt = t2.dpt and t1.dpt = 2;
-                             QUERY PLAN                             
---------------------------------------------------------------------
+                             QUERY PLAN                              
+---------------------------------------------------------------------
  Nested Loop
    ->  Append
          ->  Seq Scan on part_multi_2_q1 t1
@@ -1013,6 +1133,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, hypo_part_multi t2 WHERE t1.dpt
          ->  Seq Scan on part_multi_2_q3 t1_2
                Filter: (dpt = 2)
          ->  Seq Scan on part_multi_2_q4 t1_3
+               Filter: (dpt = 2)
+         ->  Seq Scan on part_multi_2_def t1_4
                Filter: (dpt = 2)
    ->  Materialize
          ->  Append
@@ -1024,7 +1146,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, hypo_part_multi t2 WHERE t1.dpt
                      Filter: (dpt = 2)
                ->  Seq Scan on hypo_part_multi hypo_part_multi_2_q4
                      Filter: (dpt = 2)
-(20 rows)
+               ->  Seq Scan on hypo_part_multi hypo_part_multi_2_def
+                     Filter: (dpt = 2)
+(24 rows)
 
 -- Partitionwise joins
 -- -------------------
