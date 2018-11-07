@@ -317,6 +317,8 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 	 * partition
 	 * */
 	totalrows = SPI_processed * 100 / fraction;
+	part->tuples = (int) totalrows;
+	part->set_tuples = true;
 
 	/*
 	 * Compute the statistics.  Temporary results during the calculations for

@@ -2007,9 +2007,12 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	}
 
 	/*
-	 * If this rel is a partition, we will estimate pages and tuples according
-	 * to its partition bound and root table's pages and tuples.
+	 * If this rel is a partition, we set rel->pages and rel->tuples.
 	 *
+	 * When hypoTable->set_tuples is true, pages and tuples are set
+	 * according to hypoTable->tuples.  Otherwise, we will estimate pages
+	 * and tuples here according to its partition bound and root table's
+	 * pages and tuples as follows:
 	 * In the case of RANGE/LIST partitioning, we will compute selectivity
 	 * according to the partition constraints including its ancestors'.
 	 * On the other hand, in the case of HASH partitioning, we will multiply
@@ -2043,18 +2046,6 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		}
 
 		/*
-		 * hypo_clauselist_selectivity will retrieve the constraints for this
-		 * partition and all its ancestors
-		 */
-		selectivity = hypo_clauselist_selectivity(root, rel, NIL,
-				part->rootid, part->parentid);
-
-		elog(DEBUG1, "hypopg: selectivity for partition \"%s\": %lf",
-				hypo_find_table(linitial_oid(planner_rt_fetch(rel->relid,
-							root)->values_lists), false)->tablename,
-				selectivity);
-
-		/*
 		 * Selectivity for hash partitions cannot be done using the standard
 		 * clauselist_selectivity(), because the underlying constraint is using
 		 * the satisfies_hash_partition() function, for which we won't be able
@@ -2078,10 +2069,38 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		elog(DEBUG1, "hypopg: total modulus for partition %s: %d",
 				part->tablename, total_modulus);
 
-		/* compute pages and tuples using selectivity and total_modulus */
-		pages = ceil(rel->pages * selectivity / total_modulus);
-		rel->pages = (BlockNumber) pages;
-		rel->tuples = clamp_row_est(rel->tuples * selectivity / total_modulus);
+
+		if (part->set_tuples)
+		{
+			/*
+			 * pages and tuples are set according to part->tuples got by
+			 * hypopg_analyze function.  But we need compute them again
+			 * using total_modulus for hash partitioning, since hypopg_analyze
+			 * cannot run on hash partitioning
+			 */
+			pages = ceil(rel->pages * part->tuples / rel->tuples / total_modulus);
+			rel->pages = (BlockNumber) pages;
+			rel->tuples = clamp_row_est(part->tuples / total_modulus);
+		}
+		else
+		{
+			/*
+			 * hypo_clauselist_selectivity will retrieve the constraints for this
+			 * partition and all its ancestors
+			 */
+			selectivity = hypo_clauselist_selectivity(root, rel, NIL,
+													  part->rootid, part->parentid);
+
+			elog(DEBUG1, "hypopg: selectivity for partition \"%s\": %lf",
+				 hypo_find_table(linitial_oid(planner_rt_fetch(rel->relid,
+															   root)->values_lists), false)->tablename,
+				 selectivity);
+
+			/* compute pages and tuples using selectivity and total_modulus */
+			pages = ceil(rel->pages * selectivity / total_modulus);
+			rel->pages = (BlockNumber) pages;
+			rel->tuples = clamp_row_est(rel->tuples * selectivity / total_modulus);
+		}
 	}
 
 	/*
