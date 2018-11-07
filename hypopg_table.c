@@ -2471,25 +2471,17 @@ hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, bool for_de
 
 		for (i = 0; i < nparts; i++)
 		{
-			Oid			inhrelid = inhoids[i];  //is this a parent oid or dummy child oid?
-			HeapTuple	tuple;
-			Datum		datum;
-			bool		isnull;
+			Oid			inhrelid = inhoids[i];
+			hypoTable   *part;
 			PartitionBoundSpec *bspec;
 
-			elog(NOTICE,"inhrelid : %u",inhrelid);
+			/*
+			 * get each partition's boundspec from hypoTable entry
+			 * instead of catalog
+			 */
+			part = hypo_find_table(inhrelid, false);
+			bspec = part->boundspec;
 
-			tuple = SearchSysCache1(RELOID, inhrelid);
-			if (!HeapTupleIsValid(tuple))
-				elog(ERROR, "cache lookup failed for relation %u", inhrelid);
-
-			datum = SysCacheGetAttr(RELOID, tuple,
-									Anum_pg_class_relpartbound,
-									&isnull);
-
-			Assert(!isnull);
-			bspec = (PartitionBoundSpec *)
-				stringToNode(TextDatumGetCString(datum));
 			if (!IsA(bspec, PartitionBoundSpec))
 				elog(ERROR, "expected PartitionBoundSpec");
 
@@ -2507,7 +2499,6 @@ hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, bool for_de
 									   ? makeBoolExpr(AND_EXPR, part_qual, -1)
 									   : linitial(part_qual));
 			}
-			ReleaseSysCache(tuple);
 		}
 
 		if (or_expr_args != NIL)
