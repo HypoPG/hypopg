@@ -39,6 +39,7 @@ CREATE TABLE part_multi_2_q1 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-0
 CREATE TABLE part_multi_2_q2 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
 CREATE TABLE part_multi_2_q3 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
 CREATE TABLE part_multi_2_q4 PARTITION OF part_multi_2 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
+CREATE TABLE part_multi_2_def PARTITION OF part_multi_2 DEFAULT;
 CREATE TABLE part_multi_1 PARTITION OF part_multi FOR VALUES IN (1) PARTITION BY RANGE(dt);
 CREATE TABLE part_multi_1_q2 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
 CREATE TABLE part_multi_1_q3 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
@@ -46,12 +47,20 @@ CREATE TABLE part_multi_1_q4 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-1
 CREATE TABLE part_multi_1_q1 PARTITION OF part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$) PARTITION BY RANGE (dt);
 CREATE TABLE part_multi_1_q1_b PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$);
 CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
+CREATE TABLE part_multi_1_def PARTITION OF part_multi_1 DEFAULT;
 CREATE TABLE part_multi_3 PARTITION OF part_multi FOR VALUES IN (3) PARTITION BY RANGE(dt);
 CREATE TABLE part_multi_3_q1 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$);
 CREATE TABLE part_multi_3_q2 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
 CREATE TABLE part_multi_3_q3 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
 CREATE TABLE part_multi_3_q4 PARTITION OF part_multi_3 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
-INSERT INTO part_multi select (i%3)+1, '2015-01-01'::date + interval '1 day' * (i%365), 'val ' || i FROM generate_series(1,10000) i;
+CREATE TABLE part_multi_3_def PARTITION OF part_multi_3 DEFAULT;
+CREATE TABLE part_multi_def PARTITION OF part_multi DEFAULT PARTITION BY RANGE(dt);
+CREATE TABLE part_multi_def_q1 PARTITION OF part_multi_def FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$);
+CREATE TABLE part_multi_def_q2 PARTITION OF part_multi_def FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$);
+CREATE TABLE part_multi_def_q3 PARTITION OF part_multi_def FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$);
+CREATE TABLE part_multi_def_q4 PARTITION OF part_multi_def FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$);
+CREATE TABLE part_multi_def_def PARTITION OF part_multi_def DEFAULT;
+INSERT INTO part_multi select (i%4)+1, '2015-01-01'::date + interval '1 day' * (i%500), 'val ' || i FROM generate_series(1,50000) i;
 
 -- Hypothetical tables
 -- -------------------
@@ -91,13 +100,14 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0', 'PARTITION OF hyp
 -- 4. Multi level range
 DROP TABLE IF EXISTS hypo_part_multi;
 CREATE TABLE hypo_part_multi(dpt smallint, dt date, val text);
-INSERT INTO hypo_part_multi select (i%3)+1, '2015-01-01'::date + interval '1 day' * (i%365), 'val ' || i FROM generate_series(1,10000) i;
+INSERT INTO hypo_part_multi select (i%4)+1, '2015-01-01'::date + interval '1 day' * (i%500), 'val ' || i FROM generate_series(1,50000) i;
 SELECT * FROM hypopg_partition_table('hypo_part_multi', 'PARTITION BY LIST (dpt)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2', 'PARTITION OF hypo_part_multi FOR VALUES IN (2)', 'PARTITION BY RANGE(dt)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_q1', 'PARTITION OF hypo_part_multi_2 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_q2', 'PARTITION OF hypo_part_multi_2 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_q3', 'PARTITION OF hypo_part_multi_2 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_q4', 'PARTITION OF hypo_part_multi_2 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_2_def', 'PARTITION OF hypo_part_multi_2 DEFAULT');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1', 'PARTITION OF hypo_part_multi FOR VALUES IN (1)', 'PARTITION BY RANGE(dt)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q2', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q3', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$)');
@@ -105,11 +115,19 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q4', 'PARTITION OF
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1', 'PARTITION OF hypo_part_multi_1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)','PARTITION BY RANGE (dt)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_b', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-02-01$$) TO ($$2015-04-01$$)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_def', 'PARTITION OF hypo_part_multi_1 DEFAULT');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3', 'PARTITION OF hypo_part_multi FOR VALUES IN (3)', 'PARTITION BY RANGE(dt)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_q1', 'PARTITION OF hypo_part_multi_3 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_q2', 'PARTITION OF hypo_part_multi_3 FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_q3', 'PARTITION OF hypo_part_multi_3 FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$)');
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_q4', 'PARTITION OF hypo_part_multi_3 FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_3_def', 'PARTITION OF hypo_part_multi_3 DEFAULT');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def', 'PARTITION OF hypo_part_multi DEFAULT' ,'PARTITION BY RANGE(dt)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_q1', 'PARTITION OF hypo_part_multi_def FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-04-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_q2', 'PARTITION OF hypo_part_multi_def FOR VALUES FROM ($$2015-04-01$$) TO ($$2015-07-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_q3', 'PARTITION OF hypo_part_multi_def FOR VALUES FROM ($$2015-07-01$$) TO ($$2015-10-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_q4', 'PARTITION OF hypo_part_multi_def FOR VALUES FROM ($$2015-10-01$$) TO ($$2016-01-01$$)');
+SELECT tablename FROM hypopg_add_partition('hypo_part_multi_def_def', 'PARTITION OF hypo_part_multi_def DEFAULT');
 
 -- Maintenance
 -- -----------

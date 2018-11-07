@@ -2007,9 +2007,12 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	}
 
 	/*
-	 * If this rel is a partition, we will estimate pages and tuples according
-	 * to its partition bound and root table's pages and tuples.
+	 * If this rel is a partition, we set rel->pages and rel->tuples.
 	 *
+	 * When hypoTable->set_tuples is true, pages and tuples are set
+	 * according to hypoTable->tuples.  Otherwise, we will estimate pages
+	 * and tuples here according to its partition bound and root table's
+	 * pages and tuples as follows:
 	 * In the case of RANGE/LIST partitioning, we will compute selectivity
 	 * according to the partition constraints including its ancestors'.
 	 * On the other hand, in the case of HASH partitioning, we will multiply
@@ -2043,18 +2046,6 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		}
 
 		/*
-		 * hypo_clauselist_selectivity will retrieve the constraints for this
-		 * partition and all its ancestors
-		 */
-		selectivity = hypo_clauselist_selectivity(root, rel, NIL,
-				part->rootid, part->parentid);
-
-		elog(DEBUG1, "hypopg: selectivity for partition \"%s\": %lf",
-				hypo_find_table(linitial_oid(planner_rt_fetch(rel->relid,
-							root)->values_lists), false)->tablename,
-				selectivity);
-
-		/*
 		 * Selectivity for hash partitions cannot be done using the standard
 		 * clauselist_selectivity(), because the underlying constraint is using
 		 * the satisfies_hash_partition() function, for which we won't be able
@@ -2078,10 +2069,38 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		elog(DEBUG1, "hypopg: total modulus for partition %s: %d",
 				part->tablename, total_modulus);
 
-		/* compute pages and tuples using selectivity and total_modulus */
-		pages = ceil(rel->pages * selectivity / total_modulus);
-		rel->pages = (BlockNumber) pages;
-		rel->tuples = clamp_row_est(rel->tuples * selectivity / total_modulus);
+
+		if (part->set_tuples)
+		{
+			/*
+			 * pages and tuples are set according to part->tuples got by
+			 * hypopg_analyze function.  But we need compute them again
+			 * using total_modulus for hash partitioning, since hypopg_analyze
+			 * cannot run on hash partitioning
+			 */
+			pages = ceil(rel->pages * part->tuples / rel->tuples / total_modulus);
+			rel->pages = (BlockNumber) pages;
+			rel->tuples = clamp_row_est(part->tuples / total_modulus);
+		}
+		else
+		{
+			/*
+			 * hypo_clauselist_selectivity will retrieve the constraints for this
+			 * partition and all its ancestors
+			 */
+			selectivity = hypo_clauselist_selectivity(root, rel, NIL,
+													  part->rootid, part->parentid);
+
+			elog(DEBUG1, "hypopg: selectivity for partition \"%s\": %lf",
+				 hypo_find_table(linitial_oid(planner_rt_fetch(rel->relid,
+															   root)->values_lists), false)->tablename,
+				 selectivity);
+
+			/* compute pages and tuples using selectivity and total_modulus */
+			pages = ceil(rel->pages * selectivity / total_modulus);
+			rel->pages = (BlockNumber) pages;
+			rel->tuples = clamp_row_est(rel->tuples * selectivity / total_modulus);
+		}
 	}
 
 	/*
@@ -2471,25 +2490,17 @@ hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, bool for_de
 
 		for (i = 0; i < nparts; i++)
 		{
-			Oid			inhrelid = inhoids[i];  //is this a parent oid or dummy child oid?
-			HeapTuple	tuple;
-			Datum		datum;
-			bool		isnull;
+			Oid			inhrelid = inhoids[i];
+			hypoTable   *part;
 			PartitionBoundSpec *bspec;
 
-			elog(NOTICE,"inhrelid : %u",inhrelid);
+			/*
+			 * get each partition's boundspec from hypoTable entry
+			 * instead of catalog
+			 */
+			part = hypo_find_table(inhrelid, false);
+			bspec = part->boundspec;
 
-			tuple = SearchSysCache1(RELOID, inhrelid);
-			if (!HeapTupleIsValid(tuple))
-				elog(ERROR, "cache lookup failed for relation %u", inhrelid);
-
-			datum = SysCacheGetAttr(RELOID, tuple,
-									Anum_pg_class_relpartbound,
-									&isnull);
-
-			Assert(!isnull);
-			bspec = (PartitionBoundSpec *)
-				stringToNode(TextDatumGetCString(datum));
 			if (!IsA(bspec, PartitionBoundSpec))
 				elog(ERROR, "expected PartitionBoundSpec");
 
@@ -2507,7 +2518,6 @@ hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, bool for_de
 									   ? makeBoolExpr(AND_EXPR, part_qual, -1)
 									   : linitial(part_qual));
 			}
-			ReleaseSysCache(tuple);
 		}
 
 		if (or_expr_args != NIL)
