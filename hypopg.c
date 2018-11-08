@@ -538,12 +538,15 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 					 * is a hypothetical partition, root table oid is equal to
 					 * relationObjectId, so nothing to do
 					 */
-
 					AppendRelInfo *appinfo;
 					RelOptInfo *parentrel = rel;
 					do
 					{
+#if PG_VERSION_NUM >= 110000
 						appinfo = root->append_rel_array[parentrel->relid];
+#else
+						appinfo = find_childrel_appendrelinfo(root, parentrel);
+#endif		/* pg10 only */
 						parentrel = find_base_rel(root, appinfo->parent_relid);
 					} while (parentrel->reloptkind == RELOPT_OTHER_MEMBER_REL);
 					parentId = appinfo->parent_reloid;
@@ -556,7 +559,7 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 
 				if (entry->relid == parentId
 #if PG_VERSION_NUM >= 100000
-					&& !rel->part_scheme
+					&& rel->reloptkind != RELOPT_OTHER_MEMBER_REL
 #endif
 					)
 				{

@@ -42,8 +42,10 @@
 #endif
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
-#if PG_VERSION_NUM >= 100000
+#if PG_VERSION_NUM >= 110000
 #include "utils/partcache.h"
+#endif
+#if PG_VERSION_NUM >= 100000
 #include "utils/ruleutils.h"
 #endif
 #include "utils/selfuncs.h"
@@ -220,6 +222,7 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 
 	Assert(hypoStatsHash);
 
+#if PG_VERSION_NUM >= 110000
 	/*
 	 * We can't use the same heuristics for hash partitions selectivity
 	 * estimation, because its constraint is using satisfies_hash_partition(),
@@ -234,6 +237,7 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 				" skipping", part->tablename);
 		return;
 	}
+#endif
 
 	/*
 	 * Set up a working context so that we can easily free whatever junk gets
