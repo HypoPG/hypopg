@@ -28,6 +28,9 @@
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "catalog/pg_class.h"
+#if PG_VERSION_NUM < 110000
+#include "catalog/pg_inherits_fn.h"
+#endif
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_type.h"
@@ -50,10 +53,12 @@
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#if PG_VERSION_NUM >= 110000
 #include "utils/partcache.h"
+#include "partitioning/partbounds.h"
+#endif
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
-#include "partitioning/partbounds.h"
 #endif
 
 #include "include/hypopg.h"
@@ -93,7 +98,9 @@ static PartitionScheme hypo_find_partition_scheme(PlannerInfo *root,
 static void hypo_generate_partition_key_exprs(hypoTable *entry,
 		RelOptInfo *rel);
 static PartitionBoundSpec *hypo_get_boundspec(Oid tableid);
+#if PG_VERSION_NUM >= 110000
 static Oid hypo_get_default_partition_oid(hypoTable *parent);
+#endif
 static char *hypo_get_partbounddef(hypoTable *entry);
 static char *hypo_get_partkeydef(hypoTable *entry);
 static hypoTable *hypo_newTable(Oid parentid);
@@ -439,6 +446,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 
 		boundspec = (Node *) hypo_get_boundspec(inhrelid);
 
+#if PG_VERSION_NUM >= 110000
 		/*
 		 * Sanity check: If the PartitionBoundSpec says this is the default
 		 * partition, its OID should correspond to whatever's stored in
@@ -453,6 +461,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 				elog(ERROR, "expected partdefid %u, but got %u",
 					 inhrelid, partdefid);
 		}
+#endif
 
 		boundspecs = lappend(boundspecs, boundspec);
 		partoids = lappend_oid(partoids, inhrelid);
@@ -468,6 +477,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 			oids[i++] = lfirst_oid(cell);
 
 		/* Convert from node to the internal representation */
+#if PG_VERSION_NUM >= 110000
 		if (key->strategy == PARTITION_STRATEGY_HASH)
 		{
 			ndatums = nparts;
@@ -496,7 +506,9 @@ hypo_generate_partitiondesc(hypoTable *parent)
 			qsort(hbounds, nparts, sizeof(PartitionHashBound *),
 				  qsort_partition_hbound_cmp);
 		}
-		else if (key->strategy == PARTITION_STRATEGY_LIST)
+		else
+#endif
+		if (key->strategy == PARTITION_STRATEGY_LIST)
 		{
 			List	   *non_null_values = NIL;
 
@@ -514,6 +526,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 				if (spec->strategy != PARTITION_STRATEGY_LIST)
 					elog(ERROR, "invalid strategy in partition bound spec");
 
+#if PG_VERSION_NUM >= 110000
 				/*
 				 * Note the index of the partition bound spec for the default
 				 * partition. There's no datum to add to the list of non-null
@@ -525,6 +538,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 					i++;
 					continue;
 				}
+#endif
 
 				foreach(c, spec->listdatums)
 				{
@@ -605,6 +619,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 				if (spec->strategy != PARTITION_STRATEGY_RANGE)
 					elog(ERROR, "invalid strategy in partition bound spec");
 
+#if PG_VERSION_NUM >= 110000
 				/*
 				 * Note the index of the partition bound spec for the default
 				 * partition. There's no datum to add to the allbounds array
@@ -615,11 +630,19 @@ hypo_generate_partitiondesc(hypoTable *parent)
 					default_index = i++;
 					continue;
 				}
+#endif
 
+#if PG_VERSION_NUM < 110000
+				lower = make_one_range_bound(key, i, spec->lowerdatums,
+											 true);
+				upper = make_one_range_bound(key, i, spec->upperdatums,
+											 false);
+#else
 				lower = make_one_partition_rbound(key, i, spec->lowerdatums,
 											 true);
 				upper = make_one_partition_rbound(key, i, spec->upperdatums,
 											 false);
+#endif
 				all_bounds[ndatums++] = lower;
 				all_bounds[ndatums++] = upper;
 				i++;
@@ -719,6 +742,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 
 		switch (key->strategy)
 		{
+#if PG_VERSION_NUM >= 110000
 			case PARTITION_STRATEGY_HASH:
 				{
 					/* Modulus are stored in ascending order */
@@ -754,6 +778,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 					pfree(hbounds);
 					break;
 				}
+#endif
 
 			case PARTITION_STRATEGY_LIST:
 				{
@@ -978,9 +1003,13 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 
 	MemoryContextSwitchTo(oldcontext);
 
+#if PG_VERSION_NUM >= 110000
 	/* determine support function number to search for */
 	procnum = (key->strategy == PARTITION_STRATEGY_HASH) ?
 		HASHEXTENDED_PROC : BTORDER_PROC;
+#else
+	procnum = BTORDER_PROC;
+#endif
 
 	/* Copy partattrs and fill other per-attribute info */
 	memcpy(key->partattrs, partattrs, key->partnatts * sizeof(int16));
@@ -1012,8 +1041,12 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("operator class \"%s\" of access method %s is missing support function %d for type %s",
 							NameStr(opclassform->opcname),
+#if PG_VERSION_NUM >= 110000
 							(key->strategy == PARTITION_STRATEGY_HASH) ?
 							"hash" : "btree",
+#else
+							"btree",
+#endif
 							procnum,
 							format_type_be(opclassform->opcintype))));
 
@@ -1259,6 +1292,7 @@ hypo_get_boundspec(Oid tableid)
 	return NULL;
 }
 
+#if PG_VERSION_NUM >= 110000
 /*
  * Return the Oid of the default partition if any, otherwise return InvalidOid
  */
@@ -1277,6 +1311,7 @@ hypo_get_default_partition_oid(hypoTable *parent)
 
 	return InvalidOid;
 }
+#endif
 
 /*
  * Deparse the stored PartitionBoundSpec data
@@ -1299,14 +1334,17 @@ hypo_get_partbounddef(hypoTable *entry)
 	buf = &_buf;
 	_context.buf = &_buf;
 
+#if PG_VERSION_NUM >= 110000
 	if (spec->is_default)
 	{
 		appendStringInfoString(buf, "DEFAULT");
 		return buf->data;
 	}
+#endif
 
 	switch (spec->strategy)
 	{
+#if PG_VERSION_NUM >= 110000
 		case PARTITION_STRATEGY_HASH:
 			Assert(spec->modulus > 0 && spec->remainder >= 0);
 			Assert(spec->modulus > spec->remainder);
@@ -1315,6 +1353,7 @@ hypo_get_partbounddef(hypoTable *entry)
 			appendStringInfo(buf, " WITH (modulus %d, remainder %d)",
 							 spec->modulus, spec->remainder);
 			break;
+#endif
 
 		case PARTITION_STRATEGY_LIST:
 			Assert(spec->listdatums != NIL);
@@ -1383,9 +1422,11 @@ hypo_get_partkeydef(hypoTable *entry)
 	appendStringInfo(&buf, "PARTITION BY ");
 	switch(partkey->strategy)
 	{
+#if PG_VERSION_NUM >= 110000
 		case PARTITION_STRATEGY_HASH:
 			appendStringInfo(&buf, "HASH");
 			break;
+#endif
 		case PARTITION_STRATEGY_LIST:
 			appendStringInfo(&buf, "LIST");
 			break;
@@ -1414,7 +1455,11 @@ hypo_get_partkeydef(hypoTable *entry)
 			char	   *attname;
 			int32		keycoltypmod;
 
+#if PG_VERSION_NUM < 110000
+			attname = get_attname(relid, attnum);
+#else
 			attname = get_attname(relid, attnum, false);
+#endif
 			appendStringInfoString(&buf, quote_identifier(attname));
 			get_atttypetypmodcoll(relid, attnum,
 								  &keycoltype, &keycoltypmod,
@@ -1832,6 +1877,7 @@ hypo_transformPartitionBound(ParseState *pstate, hypoTable *parent,
 	/* Avoid scribbling on input */
 	result_spec = copyObject(spec);
 
+#if PG_VERSION_NUM >= 110000
 	if (spec->is_default)
 	{
 		if (strategy == PARTITION_STRATEGY_HASH)
@@ -1869,7 +1915,9 @@ hypo_transformPartitionBound(ParseState *pstate, hypoTable *parent,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					 errmsg("remainder for hash partition must be less than modulus")));
 	}
-	else if (strategy == PARTITION_STRATEGY_LIST)
+	else
+#endif
+	if (strategy == PARTITION_STRATEGY_LIST)
 	{
 		ListCell   *cell;
 		char	   *colname;
@@ -1884,8 +1932,13 @@ hypo_transformPartitionBound(ParseState *pstate, hypoTable *parent,
 
 		/* Get the only column's name in case we need to output an error */
 		if (key->partattrs[0] != 0)
+#if PG_VERSION_NUM < 110000
+			colname = get_attname(parent->rootid,
+								  key->partattrs[0]);
+#else
 			colname = get_attname(parent->rootid,
 								  key->partattrs[0], false);
+#endif
 		else
 			colname = deparse_expression((Node *) linitial(partexprs),
 										 deparse_context_for(parent->tablename,
@@ -1969,8 +2022,13 @@ hypo_transformPartitionBound(ParseState *pstate, hypoTable *parent,
 
 			/* Get the column's name in case we need to output an error */
 			if (key->partattrs[i] != 0)
+#if PG_VERSION_NUM < 110000
+				colname = get_attname(parent->rootid,
+									  key->partattrs[i]);
+#else
 				colname = get_attname(parent->rootid,
 									  key->partattrs[i], false);
+#endif
 			else
 			{
 				colname = deparse_expression((Node *) list_nth(partexprs, j),
@@ -2068,7 +2126,10 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		&&HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
 		Oid partoid;
-		hypoTable *part, *cur_part;
+		hypoTable *part;
+#if PG_VERSION_NUM >= 110000
+		hypoTable *cur_part;
+#endif
 		RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
 		Selectivity selectivity;
 		double pages;
@@ -2089,6 +2150,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 			return;
 		}
 
+#if PG_VERSION_NUM >= 110000
 		/*
 		 * Selectivity for hash partitions cannot be done using the standard
 		 * clauselist_selectivity(), because the underlying constraint is using
@@ -2112,7 +2174,9 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		}
 		elog(DEBUG1, "hypopg: total modulus for partition %s: %d",
 				part->tablename, total_modulus);
-
+#else
+		Assert(total_modulus == 1);
+#endif
 
 		if (part->set_tuples)
 		{
@@ -2147,6 +2211,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		}
 	}
 
+#if PG_VERSION_NUM >= 110000
 	/*
 	 * This is done in query_planner just before add_base_rels_to_query() is
 	 * called, so before get_relation_info_hook is called and setup
@@ -2161,6 +2226,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		root->append_rel_array = NULL;
 	}
 	setup_append_rel_array(root);
+#endif
 }
 
 
@@ -2292,6 +2358,7 @@ hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec)
 	switch (key->strategy)
 	{
 
+#if PG_VERSION_NUM >= 110000
 	case PARTITION_STRATEGY_HASH:
 		Assert(spec->strategy == PARTITION_STRATEGY_HASH);
 		/*
@@ -2300,6 +2367,7 @@ hypo_get_qual_from_partbound(hypoTable *parent, PartitionBoundSpec *spec)
 		 * selectivity estimation
 		 */
 		break;
+#endif
 
 	case PARTITION_STRATEGY_LIST:
 		Assert(spec->strategy == PARTITION_STRATEGY_LIST);
@@ -2355,6 +2423,7 @@ hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec)
 	else
 		keyCol = (Expr *) copyObject(linitial(key->partexprs));
 
+#if PG_VERSION_NUM >= 110000
 	/*
 	 * For default list partition, collect datums for all the partitions. The
 	 * default partition constraint should check that the partition key is
@@ -2405,6 +2474,7 @@ hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec)
 		}
 	}
 	else
+#endif
 	{
 		/*
 		 * Create list of Consts for the allowed values, excluding any nulls.
@@ -2476,6 +2546,7 @@ hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec)
 			result = list_make1(nulltest);
 	}
 
+#if PG_VERSION_NUM >= 110000
 	/*
 	 * Note that, in general, applying NOT to a constraint expression doesn't
 	 * necessarily invert the set of rows it accepts, because NOT (NULL) is
@@ -2487,6 +2558,7 @@ hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec)
 		result = list_make1(make_ands_explicit(result));
 		result = list_make1(makeBoolExpr(NOT_EXPR, result, -1));
 	}
+#endif
 
 	return result;
 }
@@ -2524,6 +2596,7 @@ hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, bool for_de
 	bool		need_next_lower_arm,
 				need_next_upper_arm;
 
+#if PG_VERSION_NUM >= 110000
 	if (spec->is_default)
 	{
 		List	   *or_expr_args = NIL;
@@ -2594,6 +2667,7 @@ hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec, bool for_de
 
 		return result;
 	}
+#endif
 
 	lower_or_start_datum = list_head(spec->lowerdatums);
 	upper_or_start_datum = list_head(spec->upperdatums);
@@ -2858,6 +2932,7 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 	int			with = -1;
 	bool		overlap = false;
 
+#if PG_VERSION_NUM >= 110000
 	if (spec->is_default)
 	{
 		/*
@@ -2876,9 +2951,11 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 						relname, get_rel_name(partdesc->oids[boundinfo->default_index])),
 				 parser_errposition(pstate, spec->location)));
 	}
+#endif
 
 	switch (key->strategy)
 	{
+#if PG_VERSION_NUM >= 110000
 		case PARTITION_STRATEGY_HASH:
 			{
 				Assert(spec->strategy == PARTITION_STRATEGY_HASH);
@@ -2960,6 +3037,7 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 
 				break;
 			}
+#endif
 
 		case PARTITION_STRATEGY_LIST:
 			{
@@ -2972,8 +3050,11 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 					Assert(boundinfo &&
 						   boundinfo->strategy == PARTITION_STRATEGY_LIST &&
 						   (boundinfo->ndatums > 0 ||
-							partition_bound_accepts_nulls(boundinfo) ||
-							partition_bound_has_default(boundinfo)));
+							partition_bound_accepts_nulls(boundinfo)
+#if PG_VERSION_NUM >= 110000
+							|| partition_bound_has_default(boundinfo)
+#endif
+						   ));
 
 					foreach(cell, spec->listdatums)
 					{
@@ -2984,11 +3065,17 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 							int			offset;
 							bool		equal;
 
+#if PG_VERSION_NUM < 110000
+							offset = partition_bound_bsearch(key, boundinfo,
+															&val->constvalue,
+															true, &equal);
+#else
 							offset = partition_list_bsearch(&key->partsupfunc[0],
 															key->partcollation,
 															boundinfo,
 															val->constvalue,
 															&equal);
+#endif
 							if (offset >= 0 && equal)
 							{
 								overlap = true;
@@ -3014,16 +3101,26 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 						   *upper;
 
 				Assert(spec->strategy == PARTITION_STRATEGY_RANGE);
+#if PG_VERSION_NUM < 110000
+				lower = make_one_range_bound(key, -1, spec->lowerdatums, true);
+				upper = make_one_range_bound(key, -1, spec->upperdatums, false);
+#else
 				lower = make_one_partition_rbound(key, -1, spec->lowerdatums, true);
 				upper = make_one_partition_rbound(key, -1, spec->upperdatums, false);
+#endif
 
 				/*
 				 * First check if the resulting range would be empty with
 				 * specified lower and upper bounds
 				 */
+#if PG_VERSION_NUM < 110000
+				if (partition_rbound_cmp(key, lower->datums,
+										 lower->kind, true, upper) >= 0)
+#else
 				if (partition_rbound_cmp(key->partnatts, key->partsupfunc,
 										 key->partcollation, lower->datums,
 										 lower->kind, true, upper) >= 0)
+#endif
 				{
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
@@ -3042,8 +3139,13 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 
 					Assert(boundinfo &&
 						   boundinfo->strategy == PARTITION_STRATEGY_RANGE &&
+#if PG_VERSION_NUM < 110000
+						   boundinfo->ndatums > 0
+#else
 						   (boundinfo->ndatums > 0 ||
-							partition_bound_has_default(boundinfo)));
+							partition_bound_has_default(boundinfo))
+#endif
+						   );
 
 					/*
 					 * Test whether the new lower bound (which is treated
@@ -3060,11 +3162,16 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 					 * since the index array is initialised with an extra -1
 					 * at the end.
 					 */
+#if PG_VERSION_NUM < 110000
+					offset = partition_bound_bsearch(key, boundinfo, lower,
+													 true, &equal);
+#else
 					offset = partition_range_bsearch(key->partnatts,
 													 key->partsupfunc,
 													 key->partcollation,
 													 boundinfo, lower,
 													 &equal);
+#endif
 
 					if (boundinfo->indexes[offset + 1] < 0)
 					{
@@ -3077,6 +3184,11 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 						if (offset + 1 < boundinfo->ndatums)
 						{
 							int32		cmpval;
+#if PG_VERSION_NUM < 110000
+							cmpval = partition_bound_cmp(key, boundinfo,
+														  offset + 1, upper,
+														  true);
+#else
 							Datum	   *datums;
 							PartitionRangeDatumKind *kind;
 							bool		is_lower;
@@ -3090,6 +3202,7 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 														  key->partcollation,
 														  datums, kind,
 														  is_lower, upper);
+#endif
 							if (cmpval < 0)
 							{
 								/*

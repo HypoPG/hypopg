@@ -16,7 +16,7 @@
 #include "nodes/pg_list.h"
 #include "optimizer/planner.h"
 #include "optimizer/pathnode.h"
-#if PG_VERSION_NUM >= 100000
+#if PG_VERSION_NUM >= 110000
 #include "partitioning/partbounds.h"
 #endif
 #include "utils/rel.h"
@@ -41,6 +41,8 @@ extern char *get_am_name(Oid amOid);
 extern void get_opclass_name(Oid opclass, Oid actual_datatype, StringInfo buf);
 
 #if PG_VERSION_NUM >= 100000
+
+/* pg10 only imports */
 #if PG_VERSION_NUM < 110000
 /*
  * Imported from src/backend/catalog/partition.c, not exported
@@ -83,7 +85,19 @@ typedef struct PartitionRangeBound
 	PartitionRangeDatumKind *kind;	/* the kind of each datum */
 	bool		lower;			/* this is the lower (vs upper) bound */
 } PartitionRangeBound;
-#endif
+
+PartitionRangeBound *make_one_range_bound(PartitionKey key, int index,
+		List *datums, bool lower);
+int partition_bound_bsearch(PartitionKey key, PartitionBoundInfo boundinfo,
+						void *probe, bool probe_is_bound, bool *is_equal);
+int32 partition_bound_cmp(PartitionKey key,
+					PartitionBoundInfo boundinfo,
+					int offset, void *probe, bool probe_is_bound);
+
+int32 partition_rbound_cmp(PartitionKey key,
+					 Datum *datums1, PartitionRangeDatumKind *kind1,
+					 bool lower1, PartitionRangeBound *b2);
+#endif		/* pg10 only imports */
 
 /* Context info needed for invoking a recursive querytree display routine */
 typedef struct
