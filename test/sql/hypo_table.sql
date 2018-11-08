@@ -143,7 +143,8 @@ SELECT * FROM hypopg_analyze('hypo_part_multi',100);
 SELECT relid = rootid AS is_root, tablename, parentid IS NULL parentid_is_null,
     parentid IS NOT NULL AS parentid_is_not_null,
     partition_by_clause, partition_bounds
-FROM hypopg_table();
+FROM hypopg_table()
+ORDER BY tablename COLLATE "C";
 
 -- Test hypothetical partitioning behavior
 -- =======================================

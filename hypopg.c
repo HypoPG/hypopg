@@ -129,6 +129,9 @@ _PG_init(void)
 
 	isExplain = false;
 	hypoIndexes = NIL;
+#if PG_VERSION_NUM >= 100000
+	hypoTables = NULL;
+#endif
 
 	HypoMemoryContext = AllocSetContextCreate(TopMemoryContext,
 			"HypoPG context",
@@ -416,6 +419,13 @@ hypo_process_inval(void)
 
 	Assert(IsTransactionState());
 
+	/* XXX: remove this if support for hypothetical indexes is added */
+	if (!hypoTables)
+	{
+		pending_invals = NIL;
+		return;
+	}
+
 	if (pending_invals == NIL)
 		return;
 
@@ -424,6 +434,7 @@ hypo_process_inval(void)
 		Oid			relid = lfirst_oid(lc);
 		hypoTable  *entry = hypo_find_table(relid, false);
 		char   *relname = get_rel_name(relid);
+		bool	found;
 
 		/*
 		 * The pending invalidations should be filtered and recorded after
@@ -434,7 +445,11 @@ hypo_process_inval(void)
 		Assert(entry);
 
 		if (!relname || (strcmp(relname, entry->tablename) != 0))
-			hypo_table_remove(relid, true);
+			found = hypo_table_remove(relid, NULL, true);
+
+		if (found)
+			elog(DEBUG1, "hypopg: hypo_process_inval removed table %s (%d)",
+					relname, relid);
 	}
 
 	list_free(pending_invals);

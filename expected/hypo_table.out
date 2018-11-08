@@ -411,55 +411,56 @@ SELECT * FROM hypopg_analyze('hypo_part_multi',100);
 SELECT relid = rootid AS is_root, tablename, parentid IS NULL parentid_is_null,
     parentid IS NOT NULL AS parentid_is_not_null,
     partition_by_clause, partition_bounds
-FROM hypopg_table();
+FROM hypopg_table()
+ORDER BY tablename COLLATE "C";
  is_root |          tablename          | parentid_is_null | parentid_is_not_null |    partition_by_clause     |                 partition_bounds                 
 ---------+-----------------------------+------------------+----------------------+----------------------------+--------------------------------------------------
- t       | hypo_part_range             | t                | f                    | PARTITION BY RANGE (id)    | 
- f       | hypo_part_range_1_10000     | f                | t                    |                            | FOR VALUES FROM (1) TO (10000)
- f       | hypo_part_range_10000_20000 | f                | t                    |                            | FOR VALUES FROM (10000) TO (20000)
- f       | hypo_part_range_20000_30000 | f                | t                    |                            | FOR VALUES FROM (20000) TO (30000)
+ t       | hypo_part_hash              | t                | f                    | PARTITION BY HASH (id)     | 
+ f       | hypo_part_hash_0            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 0)
+ f       | hypo_part_hash_1            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 1)
+ f       | hypo_part_hash_2            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 2)
+ f       | hypo_part_hash_3            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 3)
+ f       | hypo_part_hash_4            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 4)
+ f       | hypo_part_hash_5            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 5)
+ f       | hypo_part_hash_6            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 6)
+ f       | hypo_part_hash_7            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 7)
+ f       | hypo_part_hash_8            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 8)
+ f       | hypo_part_hash_9            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 9)
  t       | hypo_part_list              | t                | f                    | PARTITION BY LIST (id_key) | 
+ f       | hypo_part_list_1_2_3        | f                | t                    |                            | FOR VALUES IN (1, 2, 3)
  f       | hypo_part_list_4_5_6_8_10   | f                | t                    |                            | FOR VALUES IN (4, 5, 6, 8, 10)
  f       | hypo_part_list_7_9          | f                | t                    |                            | FOR VALUES IN (7, 9)
- f       | hypo_part_list_1_2_3        | f                | t                    |                            | FOR VALUES IN (1, 2, 3)
- t       | hypo_part_hash              | t                | f                    | PARTITION BY HASH (id)     | 
- f       | hypo_part_hash_9            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 9)
- f       | hypo_part_hash_8            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 8)
- f       | hypo_part_hash_7            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 7)
- f       | hypo_part_hash_6            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 6)
- f       | hypo_part_hash_5            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 5)
- f       | hypo_part_hash_4            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 4)
- f       | hypo_part_hash_3            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 3)
- f       | hypo_part_hash_2            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 2)
- f       | hypo_part_hash_1            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 1)
- f       | hypo_part_hash_0            | f                | t                    |                            | FOR VALUES WITH (modulus 10, remainder 0)
  t       | hypo_part_multi             | t                | f                    | PARTITION BY LIST (dpt)    | 
+ f       | hypo_part_multi_1           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('1')
+ f       | hypo_part_multi_1_def       | f                | t                    |                            | DEFAULT
+ f       | hypo_part_multi_1_q1        | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
+ f       | hypo_part_multi_1_q1_a      | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('02-01-2015')
+ f       | hypo_part_multi_1_q1_b      | f                | t                    |                            | FOR VALUES FROM ('02-01-2015') TO ('04-01-2015')
+ f       | hypo_part_multi_1_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
+ f       | hypo_part_multi_1_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
+ f       | hypo_part_multi_1_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
  f       | hypo_part_multi_2           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('2')
+ f       | hypo_part_multi_2_def       | f                | t                    |                            | DEFAULT
  f       | hypo_part_multi_2_q1        | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
  f       | hypo_part_multi_2_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
  f       | hypo_part_multi_2_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
  f       | hypo_part_multi_2_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
- f       | hypo_part_multi_2_def       | f                | t                    |                            | DEFAULT
- f       | hypo_part_multi_1           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('1')
- f       | hypo_part_multi_1_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
- f       | hypo_part_multi_1_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
- f       | hypo_part_multi_1_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
- f       | hypo_part_multi_1_q1        | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
- f       | hypo_part_multi_1_q1_b      | f                | t                    |                            | FOR VALUES FROM ('02-01-2015') TO ('04-01-2015')
- f       | hypo_part_multi_1_q1_a      | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('02-01-2015')
- f       | hypo_part_multi_1_def       | f                | t                    |                            | DEFAULT
  f       | hypo_part_multi_3           | f                | t                    | PARTITION BY RANGE (dt)    | FOR VALUES IN ('3')
+ f       | hypo_part_multi_3_def       | f                | t                    |                            | DEFAULT
  f       | hypo_part_multi_3_q1        | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
  f       | hypo_part_multi_3_q2        | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
  f       | hypo_part_multi_3_q3        | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
  f       | hypo_part_multi_3_q4        | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
- f       | hypo_part_multi_3_def       | f                | t                    |                            | DEFAULT
  f       | hypo_part_multi_def         | f                | t                    | PARTITION BY RANGE (dt)    | DEFAULT
+ f       | hypo_part_multi_def_def     | f                | t                    |                            | DEFAULT
  f       | hypo_part_multi_def_q1      | f                | t                    |                            | FOR VALUES FROM ('01-01-2015') TO ('04-01-2015')
  f       | hypo_part_multi_def_q2      | f                | t                    |                            | FOR VALUES FROM ('04-01-2015') TO ('07-01-2015')
  f       | hypo_part_multi_def_q3      | f                | t                    |                            | FOR VALUES FROM ('07-01-2015') TO ('10-01-2015')
  f       | hypo_part_multi_def_q4      | f                | t                    |                            | FOR VALUES FROM ('10-01-2015') TO ('01-01-2016')
- f       | hypo_part_multi_def_def     | f                | t                    |                            | DEFAULT
+ t       | hypo_part_range             | t                | f                    | PARTITION BY RANGE (id)    | 
+ f       | hypo_part_range_10000_20000 | f                | t                    |                            | FOR VALUES FROM (10000) TO (20000)
+ f       | hypo_part_range_1_10000     | f                | t                    |                            | FOR VALUES FROM (1) TO (10000)
+ f       | hypo_part_range_20000_30000 | f                | t                    |                            | FOR VALUES FROM (20000) TO (30000)
 (46 rows)
 
 -- Test hypothetical partitioning behavior

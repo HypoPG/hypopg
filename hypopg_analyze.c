@@ -392,15 +392,9 @@ static void hypo_do_analyze_tree(Relation onerel, Relation pgstats,
 
 	Assert(hypoTables);
 
-	foreach(lc, hypoTables)
+	foreach(lc, parent->children)
 	{
-		hypoTable *part = (hypoTable *) lfirst(lc);
-
-		if (!OidIsValid(part->parentid))
-			continue;
-
-		if (part->parentid != parent->oid)
-			continue;
+		hypoTable  *part = hypo_find_table(lfirst_oid(lc), false);
 
 		hypo_do_analyze_partition(onerel, pgstats, part, fraction);
 		hypo_do_analyze_tree(onerel, pgstats, fraction, part);

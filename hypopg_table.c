@@ -62,7 +62,7 @@
 
 /*--- Variables exported ---*/
 
-List	   *hypoTables;
+HTAB	   *hypoTables;
 
 /*--- Functions --- */
 
@@ -74,7 +74,7 @@ PG_FUNCTION_INFO_V1(hypopg_table);
 
 
 #if PG_VERSION_NUM >= 100000
-static void hypo_addTable(hypoTable *entry);
+static void hypo_initTablesHash();
 static int hypo_expand_partitioned_entry(PlannerInfo *root, Oid
 		relationObjectId, RelOptInfo *rel, Relation parentrel,
 		hypoTable *branch, int firstpos, int parent_rti);
@@ -93,15 +93,16 @@ static PartitionScheme hypo_find_partition_scheme(PlannerInfo *root,
 static void hypo_generate_partition_key_exprs(hypoTable *entry,
 		RelOptInfo *rel);
 static PartitionBoundSpec *hypo_get_boundspec(Oid tableid);
-static Oid hypo_get_default_partition_oid(Oid parentid);
+static Oid hypo_get_default_partition_oid(hypoTable *parent);
 static char *hypo_get_partbounddef(hypoTable *entry);
 static char *hypo_get_partkeydef(hypoTable *entry);
 static hypoTable *hypo_newTable(Oid parentid);
 static hypoTable *hypo_table_find_parent_oid(Oid parentid);
 static hypoTable *hypo_table_name_get_entry(const char *name);
-static void hypo_table_pfree(hypoTable *entry);
-static const hypoTable *hypo_table_store_parsetree(CreateStmt *node,
-						   const char *queryString, Oid parentid, Oid rootid);
+static void hypo_table_pfree(hypoTable *entry, bool freeFieldsOnly);
+static hypoTable *hypo_table_store_parsetree(CreateStmt *node,
+						   const char *queryString, hypoTable *parent,
+						   Oid rootid);
 static PartitionBoundSpec *hypo_transformPartitionBound(ParseState *pstate,
 		hypoTable *parent, PartitionBoundSpec *spec);
 static void hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
@@ -116,17 +117,24 @@ static void hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 #define HYPO_TAG_RTI(rti, root) (planner_rt_fetch(rti, root)->security_barrier = true)
 
 
-/* Add an hypoTable to hypoTables */
-static void
-hypo_addTable(hypoTable *entry)
+/* Setup the hypoTables hash */
+static void hypo_initTablesHash()
 {
-	MemoryContext oldcontext;
+	HASHCTL		info;
 
-	oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+	Assert(!hypoTables);
+	Assert(CurrentMemoryContext != HypoMemoryContext);
 
-	hypoTables = lappend(hypoTables, entry);
+	memset(&info, 0, sizeof(info));
+	info.keysize = sizeof(Oid);
+	info.entrysize = sizeof(hypoTable);
+	info.hcxt = HypoMemoryContext;
 
-	MemoryContextSwitchTo(oldcontext);
+	hypoTables = hash_create("hypo_tables",
+			1024,
+			&info,
+			HASH_ELEM | HASH_BLOBS | HASH_CONTEXT
+			);
 }
 
 /*
@@ -303,7 +311,7 @@ hypo_expand_single_inheritance_child(PlannerInfo *root, Oid relationObjectId,
 		childrte->alias = makeNode(Alias);
 	childrte->alias->aliasname = child->tablename;
 
-	/* FIXME maybe use a mapping array here instead of rte->values_lists*/
+	/* XXX maybe use a mapping array here instead of rte->values_lists*/
 	if (expandBranch)
 		childrte->values_lists = list_make1_oid(branch->oid); //partitionOID
 	else
@@ -333,9 +341,6 @@ hypo_expand_single_inheritance_child(PlannerInfo *root, Oid relationObjectId,
 
 /*
  * Adaptation of find_inheritance_children().
- *
- * FIXME: simplify the algorithm if we maintain the number of partition per
- * parent.
  */
 static List *
 hypo_find_inheritance_children(hypoTable *parent)
@@ -344,30 +349,22 @@ hypo_find_inheritance_children(hypoTable *parent)
 	ListCell   *lc;
 	Oid			inhrelid;
 	Oid		   *oidarr;
-	int			maxoids,
-				numoids,
+	int			numoids,
 				i;
 
 	Assert(CurrentMemoryContext != HypoMemoryContext);
 
-	maxoids = 32;
-	oidarr = (Oid *) palloc(maxoids * sizeof(Oid));
+	if (list_length(parent->children) == 0)
+		return NIL;
+
+	oidarr = (Oid *) palloc(list_length(parent->children) * sizeof(Oid));
 	numoids = 0;
 
-	foreach(lc, hypoTables)
+	foreach(lc, parent->children)
 	{
-		hypoTable *entry = (hypoTable *) lfirst(lc);
+		Oid		childid = lfirst_oid(lc);
 
-		if (entry->parentid != parent->oid)
-			continue;
-
-		inhrelid = entry->oid;
-		if (numoids >= maxoids)
-		{
-			maxoids *= 2;
-			oidarr = (Oid *) repalloc(oidarr, maxoids * sizeof(Oid));
-		}
-		oidarr[numoids++] = inhrelid;
+		oidarr[numoids++] = childid;
 	}
 	/*
 	 * If we found more than one child, sort them by OID.  This ensures
@@ -379,7 +376,7 @@ hypo_find_inheritance_children(hypoTable *parent)
 		qsort(oidarr, numoids, sizeof(Oid), oid_cmp);
 
 	/*
-	 * Bild the result list.
+	 * Build the result list.
 	 */
 	for (i = 0; i < numoids; i++)
 	{
@@ -451,7 +448,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 		{
 			Oid			partdefid;
 
-			partdefid = hypo_get_default_partition_oid(parent->oid);
+			partdefid = hypo_get_default_partition_oid(parent);
 			if (partdefid != inhrelid)
 				elog(ERROR, "expected partdefid %u, but got %u",
 					 inhrelid, partdefid);
@@ -1266,16 +1263,13 @@ hypo_get_boundspec(Oid tableid)
  * Return the Oid of the default partition if any, otherwise return InvalidOid
  */
 static Oid
-hypo_get_default_partition_oid(Oid parentid)
+hypo_get_default_partition_oid(hypoTable *parent)
 {
 	ListCell *lc;
 
-	foreach(lc, hypoTables)
+	foreach(lc, parent->children)
 	{
-		hypoTable *entry = (hypoTable *) lfirst(lc);
-
-		if (entry->parentid != parentid)
-			continue;
+		hypoTable  *entry = hypo_find_table(lfirst_oid(lc), false);
 
 		if (entry->boundspec->is_default)
 			return entry->oid;
@@ -1469,38 +1463,48 @@ hypo_get_partkeydef(hypoTable *entry)
 static hypoTable *
 hypo_newTable(Oid parentid)
 {
+	Oid				entryid;
 	hypoTable	   *entry;
 	hypoTable	   *parent;
-	MemoryContext	oldcontext;
+	bool			found;
 
-	oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
-
-	entry = (hypoTable *) palloc0(sizeof(hypoTable));
-
-	entry->tablename = palloc0(NAMEDATALEN);
-	entry->set_tuples = false; /* wil be generated later if needed */
-	entry->tuples = 0; /* wil be generated later if needed */
-	entry->boundspec = NULL; /* wil be generated later if needed */
-	entry->partkey = NULL; /* wil be generated later if needed */
-
-	MemoryContextSwitchTo(oldcontext);
+	if (!hypoTables)
+		hypo_initTablesHash();
 
 	/*
 	 * If the given root table oid isn't present in hypoTables, we're
 	 * partitioning it, so keep its oid, otherwise generate a new oid
 	 */
 	parent= hypo_table_find_parent_oid(parentid);
+	if (parent)
+		entryid = hypo_getNewOid(parent->rootid);
+	else
+		entryid = parentid;
+
+	entry = (hypoTable *) hash_search(hypoTables, &entryid, HASH_ENTER,
+			&found);
+
+	Assert(!found);
+
+	memset(entry, 0, sizeof(hypoTable));
+
+	entry->oid = entryid;
+
+	entry->set_tuples = false; /* wil be generated later if needed */
+	entry->tuples = 0; /* wil be generated later if needed */
+	entry->children = NIL; /* maintained add child creation */
+	entry->boundspec = NULL; /* wil be generated later if needed */
+	entry->partkey = NULL; /* wil be generated later if needed */
+	entry->valid = false; /* set to true when all initialization is done */
 
 	if (parent)
 	{
 		entry->parentid = parent->oid;
-		entry->oid = hypo_getNewOid(parent->rootid);
 		entry->rootid = parent->rootid;
 	}
 	else
 	{
 		entry->parentid = InvalidOid;
-		entry->oid = parentid;
 		entry->rootid = parentid;
 	}
 
@@ -1514,17 +1518,7 @@ hypo_newTable(Oid parentid)
 static hypoTable *
 hypo_table_find_parent_oid(Oid parentid)
 {
-	ListCell *lc;
-
-	foreach(lc, hypoTables)
-	{
-		hypoTable *entry = (hypoTable *) lfirst(lc);
-
-		if (entry->oid == parentid)
-			return entry;
-	}
-
-	return NULL;
+	return hypo_find_table(parentid, true);
 }
 
 /*
@@ -1534,17 +1528,14 @@ hypo_table_find_parent_oid(Oid parentid)
 hypoTable *
 hypo_find_table(Oid tableid, bool missing_ok)
 {
-	ListCell *lc;
+	hypoTable  *entry;
+	bool		found = false;
 
-	foreach(lc, hypoTables)
-	{
-		hypoTable *entry = (hypoTable *) lfirst(lc);
+	if (hypoTables)
+		entry = hash_search(hypoTables, &tableid, HASH_FIND, &found);
 
-		if (entry->oid != tableid)
-			continue;
-
+	if (found)
 		return entry;
-	}
 
 	if (!missing_ok)
 		elog(ERROR, "hypopg: could not find entry for oid %d", tableid);
@@ -1559,14 +1550,17 @@ hypo_find_table(Oid tableid, bool missing_ok)
 static hypoTable *
 hypo_table_name_get_entry(const char *name)
 {
-	ListCell   *lc;
+	HASH_SEQ_STATUS	hash_seq;
+	hypoTable	   *entry;
 
-	foreach(lc, hypoTables)
+	hash_seq_init(&hash_seq, hypoTables);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
 	{
-		hypoTable  *entry = (hypoTable *) lfirst(lc);
-
 		if (strcmp(entry->tablename, name) == 0)
+		{
+			hash_seq_term(&hash_seq);
 			return entry;
+		}
 	}
 
 	return NULL;
@@ -1578,25 +1572,22 @@ hypo_table_name_get_entry(const char *name)
 bool
 hypo_table_oid_is_hypothetical(Oid relid)
 {
-	ListCell   *lc;
+	bool		found;
 
-	foreach(lc, hypoTables)
-	{
-		hypoTable  *entry = (hypoTable *) lfirst(lc);
+	if (!hypoTables)
+		return false;
 
-		if (entry->oid == relid)
-			return true;
-	}
+	hash_search(hypoTables, &relid, HASH_FIND, &found);
 
-	return false;
+	return found;
 }
 
 /* pfree all allocated memory for within an hypoTable and the entry itself. */
 static void
-hypo_table_pfree(hypoTable *entry)
+hypo_table_pfree(hypoTable *entry, bool freeFieldsOnly)
 {
-	/* pfree all memory that has been allocated */
-	pfree(entry->tablename);
+	/* free all memory that has been allocated */
+	list_free(entry->children);
 
 	if (entry->boundspec)
 		pfree(entry->boundspec);
@@ -1619,65 +1610,82 @@ hypo_table_pfree(hypoTable *entry)
 	if (entry->partopclass)
 		pfree(entry->partopclass);
 
-	/* finally pfree the entry */
-	pfree(entry);
+	/* finally pfree the entry if asked */
+	if (!freeFieldsOnly)
+		pfree(entry);
 }
 
-/*
+/* ---------------
  * Remove an hypothetical table (or unpartition a previously hypothetically
  * partitioned table) from the list of hypothetical tables.  pfree (by calling
  * hypo_table_pfree) all memory that has been allocated.  Also free all stored
  * hypothetical statistics belonging to it if any.
  *
- * The deep parameter specify whether the function should try to perform the
- * same cleanup for all entries whose rootid is the given tableid.  All
- * function should pass true for this parameter, except hypo_table_reset()
- * which will sequentially iterate over all entries.
+ * The deep parameter specifies whether the function should to perform the
+ * same cleanup for all entries that depends on the given tableid (so its
+ * inherited partitions if any).  All callers should pass true for this
+ * parameter, except hypo_table_reset() which will sequentially iterate over
+ * all entries.
+ *
+ * If you change the logic here, think to update the PG_CATCH block in
+ * hypo_table_store_parsetree() too.
  */
 bool
-hypo_table_remove(Oid tableid, bool deep)
+hypo_table_remove(Oid tableid, hypoTable *parent, bool deep)
 {
-	ListCell   *lc;
-	bool		found = false;
+	hypoTable  *entry;
 
-	/*
-	 * The cells can be removed during the loop, so we can't iterate using
-	 * standard foreach / lnext macros.
-	 */
-	lc = list_head(hypoTables);
-	while (lc != NULL)
+	if(!hypoTables)
+		return false;
+
+	entry = hypo_find_table(tableid, true);
+
+	if (!entry)
+		return false;
+
+	/* in deep mode, we need to process the inherited children first */
+	if (deep)
 	{
-		hypoTable  *entry = (hypoTable *) lfirst(lc);
+		ListCell *lc;
 
-		/* get the next cell right now, before we might remove the entry */
-		lc = lnext(lc);
-
-		if (entry->oid == tableid || entry->rootid == tableid)
+		/*
+		 * The children will be removed during this loop, so we can't iterate
+		 * using the standard foreach macro
+		 */
+		lc = list_head(entry->children);
+		while (lc != NULL)
 		{
-			if (!deep && entry->oid != tableid)
-				continue;
+			Oid childid = lfirst_oid(lc);
 
-#if PG_VERSION_NUM >= 100000
-			/* Remove any stored statistics */
-			hypo_stat_remove(tableid);
-#endif
+			/* get the next cell right now, before we remove the entry */
+			lc = lnext(lc);
 
-			hypoTables = list_delete_ptr(hypoTables, entry);
-			hypo_table_pfree(entry);
+			hypo_table_remove(childid, entry, true);
+		}
 
-			/* if ws're not doing a deep remove, the only match we can get is
-			 * entry which oid is the passed tableid.  In this case, no need to
-			 * continue looping, return true to indicate that we found and
-			 * removed and entry.
-			 */
-			if (!deep)
-				return true;
+		/*
+		 * then remove child reference in parent's list of partitions if it's
+		 * not the root partition.  This is only done in deep mode because we
+		 * then need to properly maintain the children list.
+		 */
+		if (OidIsValid(entry->parentid))
+		{
+			if (!parent)
+				parent = hypo_find_table(entry->parentid, false);
 
-			found = true;
+			Assert(parent->children);
+			Assert(list_member_oid(parent->children, tableid));
+
+			parent->children = list_delete_oid(parent->children, tableid);
 		}
 	}
 
-	return found;
+	/* free the stored fields and the entry itself */
+	hypo_table_pfree(entry, true);
+	/* remove the entry from the hash */
+	hash_search(hypoTables, &tableid, HASH_REMOVE, NULL);
+
+	return true;
 }
 
 /*
@@ -1687,21 +1695,16 @@ hypo_table_remove(Oid tableid, bool deep)
 void
 hypo_table_reset(void)
 {
-	ListCell   *lc;
+	HASH_SEQ_STATUS	hash_seq;
+	hypoTable	   *entry;
 
-	/*
-	 * The cell is removed in hypo_table_remove(), so we can't iterate using
-	 * standard foreach / lnext macros.
-	 */
-	while ((lc = list_head(hypoTables)) != NULL)
-	{
-		hypoTable  *entry = (hypoTable *) lfirst(lc);
+	if (!hypoTables)
+		return;
 
-		hypo_table_remove(entry->oid, false);
-	}
+	hash_seq_init(&hash_seq, hypoTables);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+		hypo_table_remove(entry->oid, NULL, false);
 
-	list_free(hypoTables);
-	hypoTables = NIL;
 	return;
 }
 
@@ -1710,15 +1713,19 @@ hypo_table_reset(void)
  * function is where all the hypothetic partition creation is done, except the
  * partition size estimation.
  */
-static const hypoTable *
+static hypoTable *
 hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
-		Oid parentid, Oid rootid)
+		hypoTable *parent, Oid rootid)
 {
-	hypoTable	   *entry;
+	/* must be declared "volatile", because used in a PG_CATCH() */
+	hypoTable	   *volatile entry;
 	List		   *stmts;
 	CreateStmt	   *stmt = NULL;
 	ListCell	   *lc;
 	PartitionBoundSpec *boundspec;
+	MemoryContext	oldcontext;
+
+	Assert(CurrentMemoryContext != HypoMemoryContext);
 
 	/* Run parse analysis ... */
 	stmts = transformCreateStmt(node, queryString);
@@ -1734,40 +1741,77 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 		break;
 	}
 
-	Assert(stmt);
+	if (!stmt)
+		elog(ERROR, "hypopg: wrong invocation of %s",
+				(parent ? "hypopg_add_partition" : "hypopg_partition_table"));
 
 	boundspec = stmt->partbound;
 
-	/* now create the hypothetical index entry */
-	entry = hypo_newTable(parentid);
+	/* now create the hypothetical table entry */
+	if (parent)
+		entry = hypo_newTable(parent->oid);
+	else
+		entry = hypo_newTable(rootid);
 
-	strncpy(entry->tablename, node->relation->relname, NAMEDATALEN);
-
-	/* The CreateStmt specified a PARTITION BY clause, store it */
-	if (stmt->partspec)
-		hypo_generate_partkey(stmt, rootid, entry);
-
-	if (boundspec)
+	PG_TRY();
 	{
-		hypoTable *parent = hypo_find_table(parentid, false);
-		MemoryContext oldcontext;
-		ParseState *pstate;
+		strncpy(entry->tablename, node->relation->relname, NAMEDATALEN);
 
-		pstate = make_parsestate(NULL);
-		pstate->p_sourcetext = queryString;
+		/* The CreateStmt specified a PARTITION BY clause, store it */
+		if (stmt->partspec)
+			hypo_generate_partkey(stmt, rootid, entry);
 
-		oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
-		entry->boundspec = hypo_transformPartitionBound(pstate,
-				hypo_find_table(parentid, false), boundspec);
-		MemoryContextSwitchTo(oldcontext);
+		if (boundspec)
+		{
+			ParseState *pstate;
 
-		if (parent)
+			Assert(parent);
+
+			pstate = make_parsestate(NULL);
+			pstate->p_sourcetext = queryString;
+
+			oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+			entry->boundspec = hypo_transformPartitionBound(pstate,
+					parent, boundspec);
+			MemoryContextSwitchTo(oldcontext);
+
 			hypo_check_new_partition_bound(node->relation->relname,
 					parent,
 					entry->boundspec);
-	}
+		}
 
-	hypo_addTable(entry);
+		if (parent)
+		{
+			Assert(!list_member_oid(parent->children, entry->oid));
+
+			oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+			parent->children = lappend_oid(parent->children, entry->oid);
+			MemoryContextSwitchTo(oldcontext);
+		}
+
+		entry->valid = true;
+	}
+	PG_CATCH();
+	{
+		/* ---------------
+		 * We may or may not have appended the oid to the parent's children
+		 * list, so we do the required cleanup manually instead of calling
+		 * hypo_table_remove(), which check for the oid presence in the
+		 * children list.
+		 * First, remove the children reference if it was present
+		 */
+		if (parent)
+			parent->children = list_delete_oid(parent->children, entry->oid);
+
+		/* then free the entry */
+		hypo_table_pfree(entry, true);
+
+		/* and finally remove the entry from the hash */
+		hash_search(hypoTables, &entry->oid, HASH_REMOVE, NULL);
+
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
 	return entry;
 }
@@ -2170,7 +2214,7 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *pa
 	hypoTable *child;
 	List *constraints;
 
-	/* FIXME maybe use a mapping array here instead of rte->values_lists*/
+	/* XXX maybe use a mapping array here instead of rte->values_lists*/
 	lc = list_head(planner_rt_fetch(rel->relid, root)->values_lists);
 	childOid = lfirst_oid(lc);
 	child = hypo_find_table(childOid, false);
@@ -3105,8 +3149,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	char	   *partitionof = TextDatumGetCString(PG_GETARG_TEXT_PP(1));
 	char	   *partition_by = NULL;
 	StringInfoData	sql;
+	hypoTable  *parent;
 	Oid			parentid, rootid;
-	const hypoTable  *entry;
+	hypoTable  *entry;
 	List	   *parsetree_list;
 	RawStmt	   *raw_stmt;
 	CreateStmt *stmt;
@@ -3170,8 +3215,6 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	/* Look for a hypothetical parent if we didn't find a real table */
 	if (!OidIsValid(parentid))
 	{
-		hypoTable *parent;
-
 		parent = hypo_table_name_get_entry(rv->relname);
 
 		if (parent == NULL)
@@ -3192,10 +3235,11 @@ HYPO_PARTITION_NOT_SUPPORTED();
 		 * and the parent are the same
 		 */
 		rootid = parentid;
+		parent = hypo_find_table(parentid, false);
 	}
 
 	entry = hypo_table_store_parsetree((CreateStmt *) stmt, sql.data,
-			parentid, rootid);
+			parent, rootid);
 
 	pfree(sql.data);
 
@@ -3226,7 +3270,7 @@ HYPO_PARTITION_NOT_SUPPORTED();
 		elog(ERROR, "hypopg: Oid %d is not a hypothetically partitioned table",
 				tableid);
 
-	PG_RETURN_BOOL(hypo_table_remove(tableid, true));
+	PG_RETURN_BOOL(hypo_table_remove(tableid, NULL, true));
 #endif
 }
 
@@ -3241,7 +3285,8 @@ HYPO_PARTITION_NOT_SUPPORTED();
 #else
 	Oid				tableid = PG_GETARG_OID(0);
 	char		   *partition_by = TextDatumGetCString(PG_GETARG_TEXT_PP(1));
-	const hypoTable *entry;
+	hypoTable *entry;
+	hypoTable	   *root;
 	char		   *root_name = NULL;
 	char		   *nspname = NULL;
 	bool			found = false;
@@ -3249,7 +3294,6 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	Relation		relation;
 	List		   *children = NIL;
 	List		   *parsetree_list;
-	ListCell	   *lc;
 	StringInfoData	sql;
 	RawStmt		   *raw_stmt;
 
@@ -3285,13 +3329,11 @@ HYPO_PARTITION_NOT_SUPPORTED();
 		elog(ERROR, "hypopg: Table %s.%s has inherited tables",
 				quote_identifier(nspname), quote_identifier(root_name));
 
-	foreach(lc, hypoTables)
+	root = hypo_find_table(tableid, true);
+	if (root)
 	{
-		hypoTable *search = (hypoTable *) lfirst(lc);
-
-		if (search->oid == tableid)
-			elog(ERROR, "hypopg: Table %s.%s is already hypothetically partitioned",
-					quote_identifier(nspname), quote_identifier(root_name));
+		elog(ERROR, "hypopg: Table %s.%s is already hypothetically partitioned",
+				quote_identifier(nspname), quote_identifier(root_name));
 	}
 
 	initStringInfo(&sql);
@@ -3303,7 +3345,7 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	Assert(IsA(raw_stmt->stmt, CreateStmt));
 
 	entry = hypo_table_store_parsetree((CreateStmt *) raw_stmt->stmt, sql.data,
-			tableid, tableid);
+			NULL, tableid);
 
 	/* special case for root table, copy it's original name */
 	strncpy(entry->tablename, root_name, NAMEDATALEN);
@@ -3347,7 +3389,8 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	MemoryContext oldcontext;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
-	ListCell   *lc;
+	HASH_SEQ_STATUS	hash_seq;
+	hypoTable	   *entry;
 
 	/* Process any pending invalidation */
 	hypo_process_inval();
@@ -3377,9 +3420,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 
 	MemoryContextSwitchTo(oldcontext);
 
-	foreach(lc, hypoTables)
+	hash_seq_init(&hash_seq, hypoTables);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
 	{
-		hypoTable  *entry = (hypoTable *) lfirst(lc);
 		Datum		values[HYPO_TABLE_NB_COLS];
 		bool		nulls[HYPO_TABLE_NB_COLS];
 		int			i = 0;

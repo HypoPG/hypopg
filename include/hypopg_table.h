@@ -26,34 +26,35 @@
 /*--- Structs --- */
 
 /*--------------------------------------------------------
- * Hypothetical partition storage, pretty much the needed data from RelOptInfo.
- * Some dynamic informations such as pages and lines are not stored but
- * computed when the hypothetical partition is used.
+ * Hypothetical partition storage.
+ * Some dynamic informations such as pages and lines can be stored by
+ * hypopg_analyze().  If not, they'll be computed when the hypothetical
+ * partition is used.
  */
 typedef struct hypoTable
 {
 	Oid			oid;			/* hypothetical table unique identifier */
 	Oid			parentid;		/* In case of partition, it's direct parent,
 								   otherwise InvalidOid */
-	Oid			rootid;			/* In case of partition, it's root parent,
-								   otherwise InvalidOid */
-	char	   *tablename;		/* hypothetical partition name, or original
-								   table name for root parititon */
+	Oid			rootid;			/* In case of partition, its root parentid,
+								   otherwise its own oid */
+	char		tablename[NAMEDATALEN];		/* hypothetical partition name, or
+								   original table name for root parititon */
 	Oid			namespace;		/* Oid of the hypothetical table's schema */
 	bool		set_tuples;		/* tuples are already set or not */
 	int			tuples;		    /* number of tuples of this table */
-
-	/* added for internal use */
+	List	   *children;		/* unsorted OIDs of children, if any */
 	PartitionBoundSpec	*boundspec;	/* Needed to generate the PartitionDesc and
 									   PartitionBoundInfo */
 	PartitionKey	partkey;	/* Needed to generate the partition key
 								   expressions and deparsing */
 	Oid		   *partopclass;	/* oid of partkey's element opclass, needed for
 								   deparsing the key */
+	bool		valid;
 } hypoTable;
 
 /* List of hypothetic partitions for current backend */
-extern List	   *hypoTables;
+extern HTAB	   *hypoTables;
 #else
 #define HYPO_PARTITION_NOT_SUPPORTED() elog(ERROR, "hypopg: Hypothetical partitioning requires PostgreSQl 10 or above"); PG_RETURN_VOID();
 #endif
@@ -74,7 +75,7 @@ List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
 					    hypoTable *parent);
 List *hypo_get_partition_quals_inh(hypoTable *part, hypoTable *parent);
 bool hypo_table_oid_is_hypothetical(Oid relid);
-bool hypo_table_remove(Oid tableid, bool deep);
+bool hypo_table_remove(Oid tableid, hypoTable *parent, bool deep);
 void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 					 Oid relationObjectId,
 					 RelOptInfo *rel);
