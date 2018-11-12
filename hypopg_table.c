@@ -93,10 +93,12 @@ static List *hypo_get_qual_from_partbound(hypoTable *parent,
 static PartitionDesc hypo_generate_partitiondesc(hypoTable *parent);
 static void hypo_generate_partkey(CreateStmt *stmt, Oid parentid,
 		hypoTable *entry);
+#if PG_VERSION_NUM >= 110000
 static PartitionScheme hypo_find_partition_scheme(PlannerInfo *root,
 												  PartitionKey partkey);
 static void hypo_generate_partition_key_exprs(hypoTable *entry,
 		RelOptInfo *rel);
+#endif
 static PartitionBoundSpec *hypo_get_boundspec(Oid tableid);
 #if PG_VERSION_NUM >= 110000
 static Oid hypo_get_default_partition_oid(hypoTable *parent);
@@ -112,8 +114,10 @@ static hypoTable *hypo_table_store_parsetree(CreateStmt *node,
 						   Oid rootid);
 static PartitionBoundSpec *hypo_transformPartitionBound(ParseState *pstate,
 		hypoTable *parent, PartitionBoundSpec *spec);
+#if PG_VERSION_NUM >= 110000
 static void hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 				 hypoTable *entry);
+#endif
 static List *hypo_get_qual_for_list(hypoTable *parent, PartitionBoundSpec *spec);
 static List *hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec,
 									 bool for_default);
@@ -276,10 +280,11 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 		newrelid++;
 	}
 
+#if PG_VERSION_NUM >= 110000
 	/* add partition info for root partition */
 	if (!branch)
 		hypo_set_relation_partition_info(root, rel, parent);
-
+#endif
 	return newrelid;
 }
 
@@ -1107,6 +1112,7 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 	memcpy(entry->partopclass, partopclass, sizeof(Oid) * partnatts);
 }
 
+#if PG_VERSION_NUM >= 110000
 /*
  *
  * Given a PlannerInfo and PartitionKey, find or create a PartitionScheme for
@@ -1276,6 +1282,7 @@ hypo_generate_partition_key_exprs(hypoTable *entry, RelOptInfo *rel)
 	 */
 	rel->nullable_partexprs = (List **) palloc0(sizeof(List *) * partnatts);
 }
+#endif
 
 /*
  * Return the PartitionBoundSpec associated to a partition if any, otherwise
@@ -1293,6 +1300,7 @@ hypo_get_boundspec(Oid tableid)
 }
 
 #if PG_VERSION_NUM >= 110000
+
 /*
  * Return the Oid of the default partition if any, otherwise return InvalidOid
  */
@@ -2138,7 +2146,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		Assert(rte->values_lists);
 		partoid = linitial_oid(rte->values_lists);
 		part = hypo_find_table(partoid, false);
-
+#if PG_VERSION_NUM >= 110000
 		/*
 		 * there's no need to estimate branch partitions pages and tuples, but
 		 * we have to setup their partitioning data if the partition has
@@ -2150,7 +2158,6 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 			return;
 		}
 
-#if PG_VERSION_NUM >= 110000
 		/*
 		 * Selectivity for hash partitions cannot be done using the standard
 		 * clauselist_selectivity(), because the underlying constraint is using
@@ -2230,6 +2237,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 }
 
 
+#if PG_VERSION_NUM >= 110000
 /*
  * Set partitioning scheme and relation information for a hypothetically
  * partitioned table.
@@ -2262,7 +2270,7 @@ hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 		rel->partition_qual = hypo_get_partition_constraints(root, rel, parent);
 	}
 }
-
+#endif
 
 /*
  * Given a rel corresponding to a hypothetically partitioned table, returns a
