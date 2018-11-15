@@ -26,5 +26,6 @@ extern MemoryContext HypoMemoryContext;
 
 Oid hypo_getNewOid(Oid relid);
 void hypo_process_inval(void);
+void hypo_inval_forget_oid(Oid oid);
 
 #endif

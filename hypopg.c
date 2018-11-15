@@ -457,6 +457,20 @@ hypo_process_inval(void)
 #endif
 }
 
+/*
+ * Remove an oid from the list of pending invalidation.  This is required when
+ * we remove a the root partition of a hypothetically partitioned table
+ */
+void
+hypo_inval_forget_oid(Oid oid)
+{
+#if PG_VERSION_NUM >= 100000
+	Assert(hypo_table_oid_is_hypothetical(oid));
+
+	pending_invals = list_delete_oid(pending_invals, oid);
+#endif
+}
+
 /* Reset the isExplain flag after each query */
 static void
 hypo_executorEnd_hook(QueryDesc *queryDesc)

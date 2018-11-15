@@ -1680,6 +1680,13 @@ hypo_table_remove(Oid tableid, hypoTable *parent, bool deep)
 		}
 	}
 
+	/*
+	 * remove pending invalidation for this table if we're removing the root
+	 * partition
+	 */
+	if (!OidIsValid(entry->parentid))
+		hypo_inval_forget_oid(entry->oid);
+
 	/* free the stored fields and the entry itself */
 	hypo_table_pfree(entry, true);
 	/* remove the entry from the hash */
