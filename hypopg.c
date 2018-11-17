@@ -556,8 +556,8 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 				hypoIndex  *entry = (hypoIndex *) lfirst(lc);
 
 				if (entry->relid == parentId
-#if PG_VERSION_NUM >= 100000
-					&& rel->reloptkind != RELOPT_OTHER_MEMBER_REL
+#if PG_VERSION_NUM >= 110000
+					&& !rel->part_scheme
 #endif
 					)
 				{
