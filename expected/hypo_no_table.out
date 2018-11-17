@@ -1,0 +1,28 @@
+-- Test for pg versions that don't support declarative partitioning
+-- ================================================================
+-- 0. Dropping any hypothetical object
+SELECT * FROM hypopg_reset();
+ hypopg_reset 
+--------------
+ 
+(1 row)
+
+-- 1. partition test
+CREATE TABLE hypo_part_range (id integer, val text);
+SELECT * FROM hypopg_partition_table('hypo_part_range', 'PARTITION BY RANGE (id)');
+ERROR:  hypopg: Hypothetical partitioning requires PostgreSQl 10 or above
+SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
+ERROR:  hypopg: Hypothetical partitioning requires PostgreSQl 10 or above
+-- 2. other functions
+SELECT * FROM hypopg_reset_table();
+ERROR:  hypopg: Hypothetical partitioning requires PostgreSQl 10 or above
+SELECT * FROM hypopg_drop_table('hypo_part_range'::regclass);
+ERROR:  hypopg: Hypothetical partitioning requires PostgreSQl 10 or above
+SELECT * FROM hypopg_table();
+ERROR:  hypopg: Hypothetical partitioning requires PostgreSQl 10 or above
+SELECT * FROM hypopg_analyze('hypo_part_range');
+ERROR:  hypopg: Hypothetical partitioning requires PostgreSQl 10 or above
+SELECT * FROM hypopg_statistic();
+ERROR:  hypopg: Hypothetical partitioning requires PostgreSQl 10 or above
+SELECT * FROM hypopg_stats;
+ERROR:  hypopg: Hypothetical partitioning requires PostgreSQl 10 or above

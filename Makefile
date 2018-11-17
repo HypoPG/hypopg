@@ -1,10 +1,11 @@
 EXTENSION = hypopg
 EXTVERSION   = $(shell grep default_version $(EXTENSION).control | sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 TESTS        = $(wildcard test/sql/*.sql)
+
+# more test are added later, after including pgxs
 REGRESS      = hypo_setup \
-	       hypo_index \
-	       hypo_table \
-	       hypo_index_table
+	       hypo_index
+
 
 REGRESS_OPTS = --inputdir=test
 
@@ -31,6 +32,13 @@ release-zip: all
 DATA = $(wildcard *--*.sql)
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
+
+ifeq ($(MAJORVERSION),$(filter $(MAJORVERSION),9.2 9.3 9.4 9.5 9.6))
+	REGRESS += hypo_no_table
+else
+	REGRESS += hypo_table \
+	       hypo_index_table
+endif
 
 DEBUILD_ROOT = /tmp/$(EXTENSION)
 
