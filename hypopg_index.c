@@ -358,7 +358,9 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 	{
 		Relation	relation = relation_open(relid, AccessShareLock);
 		bool		ok = relation->rd_partkey == NULL;
+#if PG_VERSION_NUM >= 110000
 		bool		relispartition = relation->rd_rel->relispartition;
+#endif
 
 		relation_close(relation, NoLock);
 

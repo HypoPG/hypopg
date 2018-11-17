@@ -434,7 +434,7 @@ hypo_process_inval(void)
 		Oid			relid = lfirst_oid(lc);
 		hypoTable  *entry = hypo_find_table(relid, false);
 		char   *relname = get_rel_name(relid);
-		bool	found;
+		bool	found = false;
 
 		/*
 		 * The pending invalidations should be filtered and recorded after

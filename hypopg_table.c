@@ -420,8 +420,10 @@ hypo_generate_partitiondesc(hypoTable *parent)
 	int			ndatums = 0;
 	int			default_index = -1;
 
+#if PG_VERSION_NUM >= 110000
 	/* Hash partitioning specific */
 	PartitionHashBound **hbounds = NULL;
+#endif
 
 	/* List partitioning specific */
 	PartitionListValue **all_values = NULL;
