@@ -581,11 +581,11 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 				 * check for hypothetical index on hypothetical leaf partition
 				 */
 				else if (hypo_table_oid_is_hypothetical(relationObjectId) &&
-						rte->values_lists &&
-						entry->relid == linitial_oid(rte->values_lists)
+						HYPO_TABLE_RTE_HAS_HYPOOID(rte) &&
+						entry->relid == HYPO_TABLE_RTE_GET_HYPOOID(rte)
 				)
 				{
-					oid = linitial_oid(rte->values_lists);
+					oid = HYPO_TABLE_RTE_GET_HYPOOID(rte);
 				}
 #endif
 				/*
@@ -628,7 +628,7 @@ hypo_get_relation_stats_hook(PlannerInfo *root,
 	 * performed yet, because postgres will search for an entry with stainherit
 	 * = true, which won't exist.
 	 */
-	if (rte->security_barrier && (rte->values_lists == NIL))
+	if (HYPO_RTE_IS_TAGGED(rte) && (!HYPO_TABLE_RTE_HAS_HYPOOID(rte)))
 	{
 		vardata->statsTuple = SearchSysCache3(STATRELATTINH,
 											  ObjectIdGetDatum(rte->relid),
@@ -659,11 +659,11 @@ hypo_get_relation_stats_hook(PlannerInfo *root,
 		return false;
 
 	/* Nothing to do if it's not a hypothetical partition */
-	if (!rte->values_lists)
+	if (!HYPO_TABLE_RTE_HAS_HYPOOID(rte))
 		return false;
 
 	/* At this point, we have a hypothetical partition.  Get its oid */
-	poid = linitial_oid(rte->values_lists);
+	poid = HYPO_TABLE_RTE_GET_HYPOOID(rte);
 	if (poid == InvalidOid)
 		/* This should not happen */
 		return false;

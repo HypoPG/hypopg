@@ -123,9 +123,6 @@ static List *hypo_get_qual_for_range(hypoTable *parent, PartitionBoundSpec *spec
 static void hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 						  PartitionBoundSpec *spec);
 
-#define HYPO_RTI_IS_TAGGED(rti, root) (planner_rt_fetch(rti, root)->security_barrier)
-#define HYPO_TAG_RTI(rti, root) (planner_rt_fetch(rti, root)->security_barrier = true)
-
 
 /* Setup the hypoTables hash */
 static void hypo_initTablesHash()
@@ -322,11 +319,10 @@ hypo_expand_single_inheritance_child(PlannerInfo *root, Oid relationObjectId,
 		childrte->alias = makeNode(Alias);
 	childrte->alias->aliasname = child->tablename;
 
-	/* XXX maybe use a mapping array here instead of rte->values_lists*/
 	if (expandBranch)
-		childrte->values_lists = list_make1_oid(branch->oid); //partitionOID
+		HYPO_TABLE_RTE_SET_HYPOOID(childrte, branch->oid); // partitionOID
 	else
-		childrte->values_lists = list_make1_oid(child->oid); //partitionOID
+		HYPO_TABLE_RTE_SET_HYPOOID(childrte, child->oid); // partitionOID
 
 	root->simple_rte_array[newrelid] = childrte;
 	HYPO_TAG_RTI(newrelid, root);
@@ -2145,8 +2141,8 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		double pages;
 		int total_modulus = 1;
 
-		Assert(rte->values_lists);
-		partoid = linitial_oid(rte->values_lists);
+		Assert(HYPO_TABLE_RTE_HAS_HYPOOID(rte));
+		partoid = HYPO_TABLE_RTE_GET_HYPOOID(rte);
 		part = hypo_find_table(partoid, false);
 #if PG_VERSION_NUM >= 110000
 		/*
@@ -2209,8 +2205,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 													  part->rootid, part->parentid);
 
 			elog(DEBUG1, "hypopg: selectivity for partition \"%s\": %lf",
-				 hypo_find_table(linitial_oid(planner_rt_fetch(rel->relid,
-															   root)->values_lists), false)->tablename,
+				 hypo_find_table(HYPO_TABLE_RTE_GET_HYPOOID(rte), false)->tablename,
 				 selectivity);
 
 			/* compute pages and tuples using selectivity and total_modulus */
@@ -2285,14 +2280,11 @@ hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 List *
 hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *parent)
 {
-	ListCell *lc;
 	Oid childOid;
 	hypoTable *child;
 	List *constraints;
 
-	/* XXX maybe use a mapping array here instead of rte->values_lists*/
-	lc = list_head(planner_rt_fetch(rel->relid, root)->values_lists);
-	childOid = lfirst_oid(lc);
+	childOid = HYPO_TABLE_RTI_GET_HYPOOID(rel->relid, root);
 	child = hypo_find_table(childOid, false);
 
 	Assert(child->parentid == parent->oid);

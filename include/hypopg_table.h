@@ -21,6 +21,18 @@
 #define HYPO_TABLE_NB_COLS		6	/* # of column hypopg_table() returns */
 #define HYPO_ADD_PART_COLS	2	/* # of column hypopg_add_partition() returns */
 
+#define HYPO_RTE_IS_TAGGED(rte) (rte && (rte->security_barrier))
+#define HYPO_RTI_IS_TAGGED(rti, root) (planner_rt_fetch(rti, root)->security_barrier)
+#define HYPO_TAG_RTI(rti, root) (planner_rt_fetch(rti, root)->security_barrier = true)
+
+/* XXX maybe use a mapping array here instead of rte->values_lists*/
+#define HYPO_TABLE_RTE_HAS_HYPOOID(rte) (rte && (rte->values_lists != NIL))
+#define HYPO_TABLE_RTE_GET_HYPOOID(rte) linitial_oid(rte->values_lists)
+#define HYPO_TABLE_RTI_GET_HYPOOID(rti, root) linitial_oid(planner_rt_fetch(rti, root)->values_lists)
+#define HYPO_TABLE_RTE_SET_HYPOOID(rte, oid) rte->values_lists = list_make1_oid(oid)
+#define HYPO_TABLE_RTE_CLEAR_HYPOOID(rte) rte->values_lists = NIL
+#define HYPO_TABLE_RTE_COPY_HYPOOID_FROM_RTE(target, src) target->values_lists = src->values_lists
+
 #include "optimizer/paths.h"
 
 /*--- Structs --- */
