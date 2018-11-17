@@ -1733,13 +1733,6 @@ hypo_table_remove(Oid tableid, hypoTable *parent, bool deep)
 		}
 	}
 
-	/*
-	 * remove pending invalidation for this table if we're removing the root
-	 * partition
-	 */
-	if (!OidIsValid(entry->parentid))
-		hypo_inval_forget_oid(entry->oid);
-
 	/* free the stored fields and the entry itself */
 	hypo_table_pfree(entry, true);
 	/* remove the entry from the hash */
@@ -1764,6 +1757,9 @@ hypo_table_reset(void)
 	hash_seq_init(&hash_seq, hypoTables);
 	while ((entry = hash_seq_search(&hash_seq)) != NULL)
 		hypo_table_remove(entry->oid, NULL, false);
+
+	/* XXX: remove this if inval support for hypothetical indexes is added */
+	hypo_clear_inval();
 
 	return;
 }
