@@ -3291,12 +3291,12 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	if (!PG_ARGISNULL(2))
 		partition_by = TextDatumGetCString(PG_GETARG_TEXT_PP(2));
 
-	if (hypo_table_name_get_entry(partname) != NULL)
-		elog(ERROR, "hypopg: hypothetical table %s already exists",
-				quote_identifier(partname));
-
 	if (RelnameGetRelid(partname) != InvalidOid)
 		elog(ERROR, "hypopg: real table %s already exists",
+				quote_identifier(partname));
+
+	if (hypo_table_name_get_entry(partname) != NULL)
+		elog(ERROR, "hypopg: hypothetical table %s already exists",
 				quote_identifier(partname));
 
 	tupdesc = CreateTemplateTupleDesc(HYPO_ADD_PART_COLS, false);
