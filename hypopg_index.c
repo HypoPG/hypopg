@@ -66,6 +66,10 @@
 #include "include/hypopg_analyze.h"
 #include "include/hypopg_index.h"
 
+#if PG_VERSION_NUM >= 100000
+#include "include/hypopg_table.h"
+#endif
+
 #if PG_VERSION_NUM >= 90600
 /* this will be updated, when needed, by hypo_discover_am */
 static Oid BLOOM_AM_OID = InvalidOid;
@@ -316,14 +320,62 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 	hypoIndex  *volatile entry;
 	Form_pg_attribute attform;
 	Oid			relid;
+#if PG_VERSION_NUM >= 100000
+	Oid			partid = InvalidOid;
+	RangeVar   *rv = node->relation;
+	bool		missing_ok;
+#endif
 	StringInfoData indexRelationName;
 	int			nkeycolumns,
 				ninccolumns;
 	ListCell   *lc;
 	int			attn;
 
-	relid =
-		RangeVarGetRelid(node->relation, AccessShareLock, false);
+#if PG_VERSION_NUM < 100000
+	relid = RangeVarGetRelid(node->relation, AccessShareLock, false);
+#else
+	/* We only allow unqualified hypothetical partition name */
+	missing_ok = (!rv->schemaname && !rv->catalogname);
+	relid = RangeVarGetRelid(node->relation, AccessShareLock, missing_ok);
+
+	/* Check if the given name is a hypothetical partition */
+	if (!OidIsValid(relid))
+	{
+		hypoTable  *table = hypo_table_name_get_entry(rv->relname);
+
+		if (!table)
+			elog(ERROR, "hypopg: table %s does not exists",
+					quote_identifier(rv->relname));
+
+		if (table->partkey)
+			elog(ERROR, "hypopg: cannot add hypothetical index on non-leaf "
+					"hypothetical partition");
+
+		relid = table->rootid;
+		partid = table->oid;
+	}
+	else
+	{
+		Relation	relation = relation_open(relid, AccessShareLock);
+		bool		ok = relation->rd_partkey == NULL;
+		bool		relispartition = relation->rd_rel->relispartition;
+
+		relation_close(relation, NoLock);
+
+#if PG_VERSION_NUM >= 110000
+		/* allow hypothetical indexes on root partition */
+		if (!ok)
+			ok = !relispartition;
+
+		if (!ok)
+			elog(ERROR, "hypopg: cannot add hypothetical index on non-leaf "
+					"or non-root partition");
+#endif
+		if (!ok)
+			elog(ERROR, "hypopg: cannot add hypothetical index on non-leaf "
+					"partition");
+	}
+#endif
 
 	/* Run parse analysis ... */
 	node = transformIndexStmt(relid, node, queryString);
@@ -360,6 +412,11 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 	/* now create the hypothetical index entry */
 	entry = hypo_newIndex(relid, node->accessMethod, nkeycolumns, ninccolumns,
 						  node->options);
+
+#if PG_VERSION_NUM >= 100000
+	if (OidIsValid(partid))
+		entry->relid = partid;
+#endif
 
 	PG_TRY();
 	{

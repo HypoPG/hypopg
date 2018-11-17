@@ -107,7 +107,6 @@ static char *hypo_get_partbounddef(hypoTable *entry);
 static char *hypo_get_partkeydef(hypoTable *entry);
 static hypoTable *hypo_newTable(Oid parentid);
 static hypoTable *hypo_table_find_parent_oid(Oid parentid);
-static hypoTable *hypo_table_name_get_entry(const char *name);
 static void hypo_table_pfree(hypoTable *entry, bool freeFieldsOnly);
 static hypoTable *hypo_table_store_parsetree(CreateStmt *node,
 						   const char *queryString, hypoTable *parent,
@@ -1600,7 +1599,7 @@ hypo_find_table(Oid tableid, bool missing_ok)
  * Return the hypothetical oid if  the given name is an hypothetical partition,
  * otherwise return InvalidOid
  */
-static hypoTable *
+hypoTable *
 hypo_table_name_get_entry(const char *name)
 {
 	HASH_SEQ_STATUS	hash_seq;

@@ -482,8 +482,10 @@ hypo_executorEnd_hook(QueryDesc *queryDesc)
 }
 
 /*
- * This function will execute the "hypo_injectHypotheticalIndex" for every
- * hypothetical index found for each relation if the isExplain flag is setup.
+ * This function will execute hypo_injectHypotheticalIndex() or
+ * hypo_injectHypotheticalPartitioning() for every matching
+ * hypothetical entry that was previously declared,  if the isExplain flag is
+ * setup.
  */
 static void
 hypo_get_relation_info_hook(PlannerInfo *root,
@@ -493,6 +495,7 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 {
 	Relation	relation;
 #if PG_VERSION_NUM >= 100000
+	RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
 	bool  hypopart = false;
 #endif
 
@@ -554,20 +557,44 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 			foreach(lc, hypoIndexes)
 			{
 				hypoIndex  *entry = (hypoIndex *) lfirst(lc);
+				bool		oid = InvalidOid;
 
+				/*
+				 * check for hypothetical index on regular table or
+				 * hypothetical index on root partitioning tree
+				 */
 				if (entry->relid == parentId
 #if PG_VERSION_NUM >= 110000
 					&& !rel->part_scheme
 #endif
-					)
+				)
 				{
-					/*
-					 * hypothetical index found, add it to the relation's
-					 * indextlist
-					 */
-					hypo_injectHypotheticalIndex(root, parentId,
-												 inhparent, rel, relation, entry);
+					oid = parentId;
 				}
+#if PG_VERSION_NUM >= 100000
+				/* check for hypothetical index on real partition */
+				else if (entry->relid == relationObjectId)
+				{
+					oid = relationObjectId;
+				}
+				/*
+				 * check for hypothetical index on hypothetical leaf partition
+				 */
+				else if (hypo_table_oid_is_hypothetical(relationObjectId) &&
+						rte->values_lists &&
+						entry->relid == linitial_oid(rte->values_lists)
+				)
+				{
+					oid = linitial_oid(rte->values_lists);
+				}
+#endif
+				/*
+				 * hypothetical index found, add it to the relation's
+				 * indextlist
+				 */
+				if (OidIsValid(oid))
+					hypo_injectHypotheticalIndex(root, oid,
+												 inhparent, rel, relation, entry);
 			}
 		}
 		/* Close the relation and keep the lock, it might be reopened later */

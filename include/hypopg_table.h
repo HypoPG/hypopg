@@ -74,6 +74,7 @@ hypoTable *hypo_find_table(Oid tableid, bool missing_ok);
 List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
 					    hypoTable *parent);
 List *hypo_get_partition_quals_inh(hypoTable *part, hypoTable *parent);
+hypoTable *hypo_table_name_get_entry(const char *name);
 bool hypo_table_oid_is_hypothetical(Oid relid);
 bool hypo_table_remove(Oid tableid, hypoTable *parent, bool deep);
 void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
