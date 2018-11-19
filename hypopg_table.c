@@ -2254,7 +2254,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 #endif
 }
 
-#if PGVERSION_NUM < 110000
+#if PG_VERSION_NUM < 110000
 /*
  * If this rel is need not be scanned, we have to mark it as dummy to omit it
  * from the appendrel
