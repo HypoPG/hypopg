@@ -92,6 +92,10 @@ bool hypo_table_remove(Oid tableid, hypoTable *parent, bool deep);
 void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 					 Oid relationObjectId,
 					 RelOptInfo *rel);
+#if PG_VERSION_NUM < 110000
+void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
+							  Index rti, RangeTblEntry *rte);
+#endif
 #endif
 
 #endif
