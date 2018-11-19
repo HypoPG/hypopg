@@ -159,6 +159,10 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 	int i, j;
 	PartitionDesc partdesc;
 	Oid *partoids;
+#if PG_VERSION_NUM < 110000
+	List *partitioned_child_rels = NIL;
+	PartitionedChildRelInfo *pcinfo;
+#endif
 
 	Assert(hypo_table_oid_is_hypothetical(relationObjectId));
 
@@ -219,6 +223,10 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 		hypo_expand_single_inheritance_child(root, relationObjectId, rel,
 				parentrel, branch, rte, branch, firstpos, parent_rti, true);
 
+#if PG_VERSION_NUM < 110000
+		partitioned_child_rels = lappend_int(partitioned_child_rels,
+											 firstpos);
+#endif
 		firstpos++;
 	}
 
@@ -275,6 +283,17 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 
 		newrelid++;
 	}
+
+#if PG_VERSION_NUM < 110000
+	/* create pcinfo for this relation */
+	if (partitioned_child_rels != NIL)
+	{
+		pcinfo = makeNode(PartitionedChildRelInfo);
+		pcinfo->parent_relid = oldsize;
+		pcinfo->child_rels = partitioned_child_rels;
+		root->pcinfo_list = lappend(root->pcinfo_list, pcinfo);
+	}
+#endif
 
 #if PG_VERSION_NUM >= 110000
 	/* add partition info for root partition */
@@ -2235,6 +2254,59 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 #endif
 }
 
+#if PGVERSION_NUM < 110000
+/*
+ * If this rel is need not be scanned, we have to mark it as dummy to omit it
+ * from the appendrel
+ *
+ * It is inspired on relation_excluded_by_constraints
+ */
+void
+hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
+							  Index rti, RangeTblEntry *rte)
+{
+	List *constraints;
+	List *safe_constraints = NIL;
+	ListCell *lc;
+	Oid  partoid = HYPO_TABLE_RTE_GET_HYPOOID(rte);
+	hypoTable *part = hypo_find_table(partoid, false);
+	hypoTable *parent = hypo_find_table(part->parentid, false);
+
+	Assert(hypo_table_oid_is_hypothetical(rte->relid));
+	Assert(rte->relkind == 'r');
+
+	/* get its partition constraints */
+	constraints = hypo_get_partition_constraints(root, rel, parent);
+
+	/*
+	 * We do not currently enforce that CHECK constraints contain only
+	 * immutable functions, so it's necessary to check here. We daren't draw
+	 * conclusions from plan-time evaluation of non-immutable functions. Since
+	 * they're ANDed, we can just ignore any mutable constraints in the list,
+	 * and reason about the rest.
+	 */
+	foreach(lc, constraints)
+	{
+		Node       *pred = (Node *) lfirst(lc);
+
+		if (!contain_mutable_functions(pred))
+			safe_constraints = lappend(safe_constraints, pred);
+	}
+
+	/*
+	 * if this partition need not be scanned, we call the set_dummy_rel_pathlist()
+	 * to mark it as dummy
+	 */
+	if (predicate_refuted_by(safe_constraints, rel->baserestrictinfo, false))
+		set_dummy_rel_pathlist(rel);
+
+	/*
+    TODO: re-estimate parent size just like set_append_rel_size()
+	*/
+
+
+}
+#endif
 
 #if PG_VERSION_NUM >= 110000
 /*

@@ -104,6 +104,13 @@ static bool hypo_get_relation_stats_hook(PlannerInfo *root,
 		AttrNumber attnum,
 		VariableStatData *vardata);
 static get_relation_stats_hook_type prev_get_relation_stats_hook = NULL;
+#if PG_VERSION_NUM < 110000
+static void hypo_set_rel_pathlist_hook(PlannerInfo *root,
+									   RelOptInfo *rel,
+									   Index rti,
+									   RangeTblEntry *rte);
+static set_rel_pathlist_hook_type prev_set_rel_pathlist_hook = NULL;
+#endif
 
 static bool hypo_query_walker(Node *node, hypoWalkerContext *context);
 static void hypo_CacheRelCallback(Datum arg, Oid relid);
@@ -126,7 +133,10 @@ _PG_init(void)
 
 	prev_get_relation_stats_hook = get_relation_stats_hook;
 	get_relation_stats_hook = hypo_get_relation_stats_hook;
-
+#if PG_VERSION_NUM < 110000
+	prev_set_rel_pathlist_hook = set_rel_pathlist_hook;
+	set_rel_pathlist_hook = hypo_set_rel_pathlist_hook;
+#endif
 	isExplain = false;
 	hypoIndexes = NIL;
 #if PG_VERSION_NUM >= 100000
@@ -167,6 +177,9 @@ _PG_fini(void)
 	get_relation_info_hook = prev_get_relation_info_hook;
 	explain_get_index_name_hook = prev_explain_get_index_name_hook;
 	get_relation_stats_hook = prev_get_relation_stats_hook;
+#if PG_VERSION_NUM < 110000
+	set_rel_pathlist_hook = prev_set_rel_pathlist_hook;
+#endif
 }
 
 /*---------------------------------
@@ -685,6 +698,23 @@ hypo_get_relation_stats_hook(PlannerInfo *root,
 #endif
 }
 
+#if PG_VERSION_NUM < 110000
+/*
+ * if this child relation is excluded by constraints, call set_dummy_rel_pathlist
+ */
+static void
+hypo_set_rel_pathlist_hook(PlannerInfo *root,
+						   RelOptInfo *rel,
+						   Index rti,
+						   RangeTblEntry *rte)
+{
+	if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid) && rte->relkind == 'r')
+		hypo_markDummyIfExcluded(root,rel,rti,rte);
+
+	if (prev_set_rel_pathlist_hook)
+		prev_set_rel_pathlist_hook(root, rel, rti, rte);
+}
+#endif
 
 /*
  * Reset all stored entries.
