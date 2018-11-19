@@ -82,7 +82,11 @@ PG_FUNCTION_INFO_V1(hypopg_table);
 static void hypo_initTablesHash();
 static int hypo_expand_partitioned_entry(PlannerInfo *root, Oid
 		relationObjectId, RelOptInfo *rel, Relation parentrel,
-		hypoTable *branch, int firstpos, int parent_rti);
+										 hypoTable *branch, int firstpos, int parent_rti
+#if PG_VERSION_NUM < 110000
+										 ,List **partitioned_child_rels
+#endif
+	);
 static void hypo_expand_single_inheritance_child(PlannerInfo *root,
 		Oid relationObjectId, RelOptInfo *rel, Relation parentrel,
 		hypoTable *branch, RangeTblEntry *rte, hypoTable *child, Oid newrelid,
@@ -149,8 +153,12 @@ static void hypo_initTablesHash()
  */
 static int
 hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
-		RelOptInfo *rel, Relation parentrel, hypoTable *branch, int firstpos,
-		int parent_rti)
+							  RelOptInfo *rel, Relation parentrel, hypoTable *branch, int firstpos,
+							  int parent_rti
+#if PG_VERSION_NUM < 110000
+							  ,List **partitioned_child_rels
+#endif
+	)
 {
 	hypoTable *parent;
 	int nparts;
@@ -159,10 +167,6 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 	int i, j;
 	PartitionDesc partdesc;
 	Oid *partoids;
-#if PG_VERSION_NUM < 110000
-	List *partitioned_child_rels = NIL;
-	PartitionedChildRelInfo *pcinfo;
-#endif
 
 	Assert(hypo_table_oid_is_hypothetical(relationObjectId));
 
@@ -180,7 +184,12 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 	 * resize and clean rte and rel arrays.  We need a slot for self expansion
 	 * and one per partition
 	 */
-	root->simple_rel_array_size += nparts + 1;
+#if PG_VERSION_NUM < 110000
+	if (branch)
+		root->simple_rel_array_size += nparts;
+	else
+#endif
+		root->simple_rel_array_size += nparts + 1;
 
 	root->simple_rel_array = (RelOptInfo **)
 		repalloc(root->simple_rel_array,
@@ -208,6 +217,10 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 		rte->relkind = RELKIND_PARTITIONED_TABLE;
 		rte->inh = (nparts > 0);
 		HYPO_TAG_RTI(rel->relid, root);
+#if PG_VERSION_NUM < 110000
+		*partitioned_child_rels = lappend_int(*partitioned_child_rels,
+											  firstpos);
+#endif
 	}
 	else /* branch partition, expand it */
 	{
@@ -224,14 +237,20 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 				parentrel, branch, rte, branch, firstpos, parent_rti, true);
 
 #if PG_VERSION_NUM < 110000
-		partitioned_child_rels = lappend_int(partitioned_child_rels,
-											 firstpos);
+		*partitioned_child_rels = lappend_int(*partitioned_child_rels,
+											  firstpos);
 #endif
+#if PG_VERSION_NUM >= 110000
 		firstpos++;
+#endif
 	}
 
 	Assert(rte->inh == (nparts > 0));
 
+#if PG_VERSION_NUM < 110000
+	if (!branch)
+	{
+#endif
 	/* add the partitioned table itself */
 	root->simple_rte_array[firstpos] = rte;
 
@@ -239,7 +258,9 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 			root->simple_rte_array[firstpos]);
 
 	HYPO_TAG_RTI(firstpos, root);
-
+#if PG_VERSION_NUM < 110000
+	}
+#endif
 	/*
 	 * if the table has no partition, we need to tell caller than it has to use
 	 * the new position
@@ -274,7 +295,11 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 		if (child->partkey)
 		{
 			newrelid = hypo_expand_partitioned_entry(root, relationObjectId,
-					rel, parentrel, child, newrelid, ancestor);
+													 rel, parentrel, child, newrelid, ancestor
+#if PG_VERSION_NUM < 110000
+													 ,partitioned_child_rels
+#endif
+				);
 			continue;
 		}
 
@@ -283,17 +308,6 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 
 		newrelid++;
 	}
-
-#if PG_VERSION_NUM < 110000
-	/* create pcinfo for this relation */
-	if (partitioned_child_rels != NIL)
-	{
-		pcinfo = makeNode(PartitionedChildRelInfo);
-		pcinfo->parent_relid = oldsize;
-		pcinfo->child_rels = partitioned_child_rels;
-		root->pcinfo_list = lappend(root->pcinfo_list, pcinfo);
-	}
-#endif
 
 #if PG_VERSION_NUM >= 110000
 	/* add partition info for root partition */
@@ -345,12 +359,19 @@ hypo_expand_single_inheritance_child(PlannerInfo *root, Oid relationObjectId,
 
 	root->simple_rte_array[newrelid] = childrte;
 	HYPO_TAG_RTI(newrelid, root);
-
+	root->parse->rtable = lappend(root->parse->rtable,
+								  root->simple_rte_array[newrelid]);
+#if PG_VERSION_NUM < 110000
+	if (expandBranch)
+		return;
+#endif
 	appinfo = makeNode(AppendRelInfo);
 
+#if PG_VERSION_NUM >= 110000
 	if (expandBranch || branch)
 		appinfo->parent_relid = parent_rti;
 	else
+#endif
 		appinfo->parent_relid = rel->relid;
 
 	appinfo->child_relid = newrelid;
@@ -361,8 +382,6 @@ hypo_expand_single_inheritance_child(PlannerInfo *root, Oid relationObjectId,
 	appinfo->parent_reloid = relationObjectId;
 	root->append_rel_list = lappend(root->append_rel_list,
 			appinfo);
-	root->parse->rtable = lappend(root->parse->rtable,
-			root->simple_rte_array[newrelid]);
 }
 
 /*
@@ -2129,9 +2148,29 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 	if(!HYPO_RTI_IS_TAGGED(rel->relid,root))
 	{
 		Relation parentrel;
+#if PG_VERSION_NUM < 110000
+		List     *partitioned_child_rels = NIL;
+		PartitionedChildRelInfo *pcinfo;
+#endif
 
 		parentrel = heap_open(relationObjectId, AccessShareLock);
-		hypo_expand_partitioned_entry(root, relationObjectId, rel, parentrel, NULL, root->simple_rel_array_size, -1);
+		hypo_expand_partitioned_entry(root, relationObjectId, rel, parentrel, NULL,
+									  root->simple_rel_array_size, -1
+#if PG_VERSION_NUM < 110000
+									  ,&partitioned_child_rels
+#endif
+			);
+
+#if PG_VERSION_NUM < 110000
+		/* create pcinfo for this relation */
+		if (partitioned_child_rels != NIL)
+		{
+			pcinfo = makeNode(PartitionedChildRelInfo);
+			pcinfo->parent_relid = rel->relid;
+			pcinfo->child_rels = partitioned_child_rels;
+			root->pcinfo_list = lappend(root->pcinfo_list, pcinfo);
+		}
+#endif
 		heap_close(parentrel, NoLock);
 	}
 
