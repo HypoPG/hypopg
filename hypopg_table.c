@@ -632,8 +632,10 @@ hypo_generate_partitiondesc(hypoTable *parent)
 				i++;
 			}
 
+#if PG_VERSION_NUM >= 110000
 			qsort_arg(all_values, ndatums, sizeof(PartitionListValue *),
 					  qsort_partition_list_value_cmp, (void *) key);
+#endif
 		}
 		else if (key->strategy == PARTITION_STRATEGY_RANGE)
 		{
@@ -691,11 +693,13 @@ hypo_generate_partitiondesc(hypoTable *parent)
 			Assert(ndatums == nparts * 2 ||
 				   (default_index != -1 && ndatums == (nparts - 1) * 2));
 
+#if PG_VERSION_NUM >= 110000
 			/* Sort all the bounds in ascending order */
 			qsort_arg(all_bounds, ndatums,
 					  sizeof(PartitionRangeBound *),
 					  qsort_partition_rbound_cmp,
 					  (void *) key);
+#endif
 
 			/* Save distinct bounds from all_bounds into rbounds. */
 			rbounds = (PartitionRangeBound **)
