@@ -348,21 +348,37 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 					quote_identifier(rv->relname));
 
 		if (table->partkey)
+#if PG_VERSION_NUM < 110000
 			elog(ERROR, "hypopg: cannot add hypothetical index on non-leaf "
 					"hypothetical partition");
+#else
+			elog(ERROR, "hypopg: cannot add hypothetical index on non-leaf "
+					"or non-root hypothetical partition");
+#endif
 
 		relid = table->rootid;
 		partid = table->oid;
 	}
+	/* this might be a (hypothetically) partitioned table */
 	else
 	{
 		Relation	relation = relation_open(relid, AccessShareLock);
 		bool		ok = relation->rd_partkey == NULL;
+#if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
+		hypoTable  *table;
+#endif
 #if PG_VERSION_NUM >= 110000
 		bool		relispartition = relation->rd_rel->relispartition;
 #endif
 
 		relation_close(relation, NoLock);
+
+#if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
+		table = hypo_find_table(relid, true);
+		if (table)
+			elog(ERROR, "hypopg: cannot add hypothetical index on non-leaf "
+					"hypothetical partition");
+#endif
 
 #if PG_VERSION_NUM >= 110000
 		/* allow hypothetical indexes on root partition */

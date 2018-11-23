@@ -220,6 +220,6 @@ ERROR:  hypopg: cannot add hypothetical index on non-leaf or non-root partition
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON part_multi_1_q1 (dpt)');
 ERROR:  hypopg: cannot add hypothetical index on non-leaf or non-root partition
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON hypo_part_multi_1 (dpt)');
-ERROR:  hypopg: cannot add hypothetical index on non-leaf hypothetical partition
+ERROR:  hypopg: cannot add hypothetical index on non-leaf or non-root hypothetical partition
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON hypo_part_multi_1_q1 (dpt)');
-ERROR:  hypopg: cannot add hypothetical index on non-leaf hypothetical partition
+ERROR:  hypopg: cannot add hypothetical index on non-leaf or non-root hypothetical partition
