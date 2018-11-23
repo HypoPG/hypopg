@@ -59,7 +59,7 @@
 #endif
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
-#endif
+#endif		/* pg10+ */
 
 #include "include/hypopg.h"
 #include "include/hypopg_analyze.h"
@@ -78,7 +78,7 @@ PG_FUNCTION_INFO_V1(hypopg_reset_table);
 PG_FUNCTION_INFO_V1(hypopg_table);
 
 
-#if PG_VERSION_NUM >= 100000
+#if PG_VERSION_NUM >= 100000		/* closed just before the SQL wrapper */
 static void hypo_initTablesHash();
 static int hypo_expand_partitioned_entry(PlannerInfo *root, Oid
 		relationObjectId, RelOptInfo *rel, Relation parentrel,
@@ -1321,7 +1321,7 @@ hypo_generate_partition_key_exprs(hypoTable *entry, RelOptInfo *rel)
 	 */
 	rel->nullable_partexprs = (List **) palloc0(sizeof(List *) * partnatts);
 }
-#endif
+#endif		/* pg11+ */
 
 /*
  * Return the PartitionBoundSpec associated to a partition if any, otherwise
@@ -3366,7 +3366,7 @@ hypo_check_new_partition_bound(char *relname, hypoTable *parent,
 	}
 }
 
-#endif
+#endif		/* pg10+ (~l. 81) */
 
 /*
  * SQL wrapper to create an hypothetical partition with his parsetree
