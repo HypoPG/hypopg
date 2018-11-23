@@ -36,9 +36,14 @@ include $(PGXS)
 ifeq ($(MAJORVERSION),$(filter $(MAJORVERSION),9.2 9.3 9.4 9.5 9.6))
 	REGRESS += hypo_no_table
 else
+ifeq ($(MAJORVERSION),$(filter $(MAJORVERSION),10))
+	REGRESS += hypo_table_10 \
+	       hypo_index_table_10
+else
 	REGRESS += hypo_table \
 	       hypo_index_table
-endif
+endif # pg10
+endif # pg 11+
 
 DEBUILD_ROOT = /tmp/$(EXTENSION)
 
