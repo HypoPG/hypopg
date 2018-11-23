@@ -1384,18 +1384,28 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = 
 -- Tests for sanity checks
 -- =======================
 -- Duplicate name
+CREATE TABLE part_range_1_10000 PARTITION OF part_range FOR VALUES FROM (1) TO (10000);
+ERROR:  relation "part_range_1_10000" already exists
 SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
 ERROR:  hypopg: hypothetical table hypo_part_range_1_10000 already exists
 -- Overlapping range bounds
+CREATE TABLE part_range_1_10000_dup PARTITION OF part_range FOR VALUES FROM (1) TO (10000);
+ERROR:  partition "part_range_1_10000_dup" would overlap partition "part_range_1_10000"
 SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000_dup', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
 ERROR:  hypopg: partition "hypo_part_range_1_10000_dup" would overlap partition "hypo_part_range_1_10000"
 -- Overlapping list bounds
+CREATE TABLE part_list_1_2_3_dup PARTITION OF part_list FOR VALUES IN (1, 2, 3);
+ERROR:  partition "part_list_1_2_3_dup" would overlap partition "part_list_1_2_3"
 SELECT tablename FROM hypopg_add_partition('hypo_part_list_1_2_3_dup', 'PARTITION OF hypo_part_list FOR VALUES IN (1, 2, 3)');
 ERROR:  hypopg: partition "hypo_part_list_1_2_3_dup" would overlap partition "hypo_part_list_1_2_3"
 -- Overlapping hash bounds
+CREATE TABLE part_hash_0 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0);
+ERROR:  relation "part_hash_0" already exists
 SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0_dup', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0)');
 ERROR:  hypopg: partition "hypo_part_hash_0_dup" would overlap partition "hypo_part_hash_0"
 -- Overlapping range bounds, subpartition
+CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
+ERROR:  relation "part_multi_1_q1_a" already exists
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a_dup', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
 ERROR:  hypopg: partition "hypo_part_multi_1_q1_a_dup" would overlap partition "hypo_part_multi_1_q1_a"
 -- relcache callback test

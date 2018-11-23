@@ -236,14 +236,19 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = 
 -- =======================
 
 -- Duplicate name
+CREATE TABLE part_range_1_10000 PARTITION OF part_range FOR VALUES FROM (1) TO (10000);
 SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
 -- Overlapping range bounds
+CREATE TABLE part_range_1_10000_dup PARTITION OF part_range FOR VALUES FROM (1) TO (10000);
 SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000_dup', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
 -- Overlapping list bounds
+CREATE TABLE part_list_1_2_3_dup PARTITION OF part_list FOR VALUES IN (1, 2, 3);
 SELECT tablename FROM hypopg_add_partition('hypo_part_list_1_2_3_dup', 'PARTITION OF hypo_part_list FOR VALUES IN (1, 2, 3)');
 -- Overlapping hash bounds
+CREATE TABLE part_hash_0 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0);
 SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0_dup', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0)');
 -- Overlapping range bounds, subpartition
+CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a_dup', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
 
 -- relcache callback test
