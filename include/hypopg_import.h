@@ -58,8 +58,6 @@ typedef struct PartitionBoundInfoData
 	int		   *indexes;		/* Partition indexes */
 	int			null_index;		/* Index of the null-accepting partition; -1
 								 * if there isn't one */
-	int			default_index;	/* Index of the default partition; -1 if there
-								 * isn't one */
 } PartitionBoundInfoData;
 
 /* One bound of a hash partition */

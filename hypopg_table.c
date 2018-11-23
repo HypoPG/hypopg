@@ -456,9 +456,10 @@ hypo_generate_partitiondesc(hypoTable *parent)
 	PartitionDesc result;
 
 	int			ndatums = 0;
-	int			default_index = -1;
 
 #if PG_VERSION_NUM >= 110000
+	int			default_index = -1;
+
 	/* Hash partitioning specific */
 	PartitionHashBound **hbounds = NULL;
 #endif
@@ -688,8 +689,12 @@ hypo_generate_partitiondesc(hypoTable *parent)
 				i++;
 			}
 
-			Assert(ndatums == nparts * 2 ||
-				   (default_index != -1 && ndatums == (nparts - 1) * 2));
+			Assert(ndatums == nparts * 2
+#if PG_VERSION_NUM >= 110000
+					||
+				   (default_index != -1 && ndatums == (nparts - 1) * 2)
+#endif
+				   );
 
 			/* Sort all the bounds in ascending order */
 			qsort_arg(all_bounds, ndatums,
@@ -770,7 +775,9 @@ hypo_generate_partitiondesc(hypoTable *parent)
 		boundinfo = (PartitionBoundInfoData *)
 			palloc0(sizeof(PartitionBoundInfoData));
 		boundinfo->strategy = key->strategy;
+#if PG_VERSION_NUM >= 110000
 		boundinfo->default_index = -1;
+#endif
 		boundinfo->ndatums = ndatums;
 		boundinfo->null_index = -1;
 		boundinfo->datums = (Datum **) palloc0(ndatums * sizeof(Datum *));
@@ -861,6 +868,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 						boundinfo->null_index = mapping[null_index];
 					}
 
+#if PG_VERSION_NUM >= 110000
 					/* Assign mapped index for the default partition. */
 					if (default_index != -1)
 					{
@@ -875,6 +883,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 						mapping[default_index] = next_index++;
 						boundinfo->default_index = mapping[default_index];
 					}
+#endif
 
 					/* All partition must now have a valid mapping */
 					Assert(next_index == nparts);
@@ -931,6 +940,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 						}
 					}
 
+#if PG_VERSION_NUM >= 110000
 					/* Assign mapped index for the default partition. */
 					if (default_index != -1)
 					{
@@ -938,6 +948,7 @@ hypo_generate_partitiondesc(hypoTable *parent)
 						mapping[default_index] = next_index++;
 						boundinfo->default_index = mapping[default_index];
 					}
+#endif
 					boundinfo->indexes[i] = -1;
 					break;
 				}
