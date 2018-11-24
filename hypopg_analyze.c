@@ -111,6 +111,11 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 	rtable = list_make1(rte);
 
 	parse = makeNode(Query);
+	/*
+	 * makeNode() does a palloc0fast, so the commandType should already be
+	 * CMD_UNKNOWN, but force it for safety.
+	 */
+	parse->commandType = CMD_UNKNOWN;
 	parse->rtable = rtable;
 	root_dummy->parse = parse;
 
@@ -141,7 +146,7 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 		root_dummy->parse->rtable = list_make1(rte);
 
 		/* get the partition constraints, setup for a rel with relid 1 */
-		clauses = hypo_get_partition_constraints(root_dummy, rel, part);
+		clauses = hypo_get_partition_constraints(root_dummy, rel, part, true);
 
 		/*
 		 * and remove the hypothetical oid to avoid computing selectivity with

@@ -84,7 +84,7 @@ Datum		hypopg_reset_table(PG_FUNCTION_ARGS);
 #if PG_VERSION_NUM >= 100000
 hypoTable *hypo_find_table(Oid tableid, bool missing_ok);
 List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
-					    hypoTable *parent);
+					    hypoTable *parent, bool force_generation);
 List *hypo_get_partition_quals_inh(hypoTable *part, hypoTable *parent);
 hypoTable *hypo_table_name_get_entry(const char *name);
 bool hypo_table_oid_is_hypothetical(Oid relid);

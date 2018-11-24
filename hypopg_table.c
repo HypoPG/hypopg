@@ -2326,7 +2326,7 @@ hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
 	Assert(rte->relkind == 'r');
 
 	/* get its partition constraints */
-	constraints = hypo_get_partition_constraints(root, rel, parent);
+	constraints = hypo_get_partition_constraints(root, rel, parent, false);
 
 	/*
 	 * We do not currently enforce that CHECK constraints contain only
@@ -2388,7 +2388,8 @@ hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 	if (OidIsValid(entry->parentid))
 	{
 		hypoTable *parent = hypo_find_table(entry->parentid, false);
-		rel->partition_qual = hypo_get_partition_constraints(root, rel, parent);
+		rel->partition_qual = hypo_get_partition_constraints(root, rel, parent,
+				false);
 	}
 }
 #endif
@@ -2399,14 +2400,20 @@ hypo_set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
  * ancestors if any.  The main processing is done in
  * hypo_get_partition_quals_inh.
  *
+ * The force_generation is used to make sure that hypo_clauselist_selectivity()
+ * will get all the constraints, since it's required for a proper selectivity
+ * estimation.
+ *
  * It is inspired on get_relation_constraints()
  */
 List *
-hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *parent)
+hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
+		hypoTable *parent, bool force_generation)
 {
+	Index varno = rel->relid;
 	Oid childOid;
 	hypoTable *child;
-	List *constraints;
+	List *pcqual;
 
 	childOid = HYPO_TABLE_RTI_GET_HYPOOID(rel->relid, root);
 	child = hypo_find_table(childOid, false);
@@ -2414,24 +2421,46 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel, hypoTable *pa
 	Assert(child->parentid == parent->oid);
 
 	/* get its partition constraints */
-	constraints = hypo_get_partition_quals_inh(child, parent);
+	pcqual = hypo_get_partition_quals_inh(child, parent);
 
-	if (constraints)
+#if PG_VERSION_NUM >= 110000
+	Assert(
+			(force_generation &&
+			 list_length(root->parse->rtable) == 1 &&
+			 root->parse->commandType == CMD_UNKNOWN &&
+			 hypo_table_oid_is_hypothetical(root->simple_rte_array[1]->relid))
+			|| !force_generation
+	);
+
+	/*
+	 * For selects, partition pruning uses the parent table's partition bound
+	 * descriptor, instead of constraint exclusion which is driven by the
+	 * individual partition's partition constraint.
+	 */
+	if ((enable_partition_pruning && root->parse->commandType != CMD_SELECT)
+			|| force_generation)
+	{
+#endif
+	if (pcqual)
 	{
 		/*
-		 * Run each expression through const-simplification and
-		 * canonicalization similar to check constraints.
+		 * Run the partition quals through const-simplification similar to
+		 * check constraints.  We skip canonicalize_qual, though, because
+		 * partition quals should be in canonical form already; also, since
+		 * the qual is in implicit-AND format, we'd have to explicitly convert
+		 * it to explicit-AND format and back again.
 		 */
-		constraints = (List *) eval_const_expressions(root, (Node *) constraints);
-		/* FIXME this func will be modified at pg11 */
-		// constraints = (List *) canonicalize_qual((Expr *) constraints, true);
+		pcqual = (List *) eval_const_expressions(root, (Node *) pcqual);
 
 		/* Fix Vars to have the desired varno */
-		if (rel->relid != 1)
-			ChangeVarNodes((Node *) constraints, 1, rel->relid, 0);
+		if (varno != 1)
+			ChangeVarNodes((Node *) pcqual, 1, varno, 0);
 	}
+#if PG_VERSION_NUM >= 110000
+	}
+#endif
 
-	return constraints;
+	return pcqual;
 }
 
 /*
