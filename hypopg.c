@@ -104,7 +104,7 @@ static bool hypo_get_relation_stats_hook(PlannerInfo *root,
 		AttrNumber attnum,
 		VariableStatData *vardata);
 static get_relation_stats_hook_type prev_get_relation_stats_hook = NULL;
-#if PG_VERSION_NUM < 110000
+#if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
 static void hypo_set_rel_pathlist_hook(PlannerInfo *root,
 									   RelOptInfo *rel,
 									   Index rti,
@@ -133,7 +133,7 @@ _PG_init(void)
 
 	prev_get_relation_stats_hook = get_relation_stats_hook;
 	get_relation_stats_hook = hypo_get_relation_stats_hook;
-#if PG_VERSION_NUM < 110000
+#if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
 	prev_set_rel_pathlist_hook = set_rel_pathlist_hook;
 	set_rel_pathlist_hook = hypo_set_rel_pathlist_hook;
 #endif
@@ -177,7 +177,7 @@ _PG_fini(void)
 	get_relation_info_hook = prev_get_relation_info_hook;
 	explain_get_index_name_hook = prev_explain_get_index_name_hook;
 	get_relation_stats_hook = prev_get_relation_stats_hook;
-#if PG_VERSION_NUM < 110000
+#if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
 	set_rel_pathlist_hook = prev_set_rel_pathlist_hook;
 #endif
 }
@@ -698,7 +698,7 @@ hypo_get_relation_stats_hook(PlannerInfo *root,
 #endif
 }
 
-#if PG_VERSION_NUM < 110000
+#if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
 /*
  * if this child relation is excluded by constraints, call set_dummy_rel_pathlist
  */
