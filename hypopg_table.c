@@ -92,6 +92,9 @@ static void hypo_expand_single_inheritance_child(PlannerInfo *root,
 		hypoTable *branch, RangeTblEntry *rte, hypoTable *child, Oid newrelid,
 		int parent_rti, bool expandBranch);
 static List *hypo_find_inheritance_children(hypoTable *parent);
+#if PG_VERSION_NUM < 110000
+static List *hypo_find_all_inheritors(Oid parentrelId, List **numparents);
+#endif
 static List *hypo_get_qual_from_partbound(hypoTable *parent,
 		PartitionBoundSpec *spec);
 static PartitionDesc hypo_generate_partitiondesc(hypoTable *parent);
@@ -160,36 +163,53 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 #endif
 	)
 {
+#if PG_VERSION_NUM < 110000
+	List *inhOIDs;
+	ListCell *l;
+#else
 	hypoTable *parent;
+	PartitionDesc partdesc;
+#endif
 	int nparts;
 	RangeTblEntry *rte;
 	int newrelid, oldsize = root->simple_rel_array_size;
 	int i, j;
-	PartitionDesc partdesc;
 	Oid *partoids;
 
 	Assert(hypo_table_oid_is_hypothetical(relationObjectId));
 
+#if PG_VERSION_NUM >= 110000
 	if (!branch)
 		parent = hypo_find_table(relationObjectId, false);
 	else
 		parent = branch;
+#endif
 
+#if PG_VERSION_NUM < 110000
+	/*
+	 * get all of the partition oids including a root table from
+	 * hypo_find_all_inheritors, but remove the root table oid from
+	 * the list since we expand a root table separately
+	 */
+	inhOIDs = hypo_find_all_inheritors(relationObjectId, NULL);
+	inhOIDs = list_delete_first(inhOIDs);
+	nparts = list_length(inhOIDs);
+	partoids = (Oid *) palloc(nparts * sizeof(Oid));
+	i = 0;
+	foreach(l, inhOIDs)
+		partoids[i++] = lfirst_oid(l);
+#else
 	/* get all of the partition oids from PartitionDesc */
 	partdesc = hypo_generate_partitiondesc(parent);
 	partoids = partdesc->oids;
 	nparts = partdesc->nparts;
+#endif
 
 	/*
 	 * resize and clean rte and rel arrays.  We need a slot for self expansion
 	 * and one per partition
 	 */
-#if PG_VERSION_NUM < 110000
-	if (branch)
-		root->simple_rel_array_size += nparts;
-	else
-#endif
-		root->simple_rel_array_size += nparts + 1;
+	root->simple_rel_array_size += nparts + 1;
 
 	root->simple_rel_array = (RelOptInfo **)
 		repalloc(root->simple_rel_array,
@@ -236,21 +256,10 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 		hypo_expand_single_inheritance_child(root, relationObjectId, rel,
 				parentrel, branch, rte, branch, firstpos, parent_rti, true);
 
-#if PG_VERSION_NUM < 110000
-		*partitioned_child_rels = lappend_int(*partitioned_child_rels,
-											  firstpos);
-#endif
-#if PG_VERSION_NUM >= 110000
 		firstpos++;
-#endif
 	}
-
 	Assert(rte->inh == (nparts > 0));
 
-#if PG_VERSION_NUM < 110000
-	if (!branch)
-	{
-#endif
 	/* add the partitioned table itself */
 	root->simple_rte_array[firstpos] = rte;
 
@@ -258,9 +267,7 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 			root->simple_rte_array[firstpos]);
 
 	HYPO_TAG_RTI(firstpos, root);
-#if PG_VERSION_NUM < 110000
-	}
-#endif
+
 	/*
 	 * if the table has no partition, we need to tell caller than it has to use
 	 * the new position
@@ -273,7 +280,6 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 	 * for all hypothetical partitions
 	 */
 	newrelid = firstpos + 1;
-
 	for (j = 0; j < nparts; j++)
 	{
 		Oid childOid = partoids[j];
@@ -290,19 +296,19 @@ hypo_expand_partitioned_entry(PlannerInfo *root, Oid relationObjectId,
 			ancestor = rel->relid;
 
 		child = hypo_find_table(childOid, false);
-
+#if PG_VERSION_NUM < 110000
+		if (child->partkey)
+			*partitioned_child_rels = lappend_int(*partitioned_child_rels,
+												  firstpos);
+#else
 		/* Expand the child if it's partitioned */
 		if (child->partkey)
 		{
 			newrelid = hypo_expand_partitioned_entry(root, relationObjectId,
-													 rel, parentrel, child, newrelid, ancestor
-#if PG_VERSION_NUM < 110000
-													 ,partitioned_child_rels
-#endif
-				);
+													 rel, parentrel, child, newrelid, ancestor);
 			continue;
 		}
-
+#endif
 		hypo_expand_single_inheritance_child(root, relationObjectId, rel,
 				parentrel, branch, rte, child, newrelid, ancestor, false);
 
@@ -362,8 +368,11 @@ hypo_expand_single_inheritance_child(PlannerInfo *root, Oid relationObjectId,
 	root->parse->rtable = lappend(root->parse->rtable,
 								  root->simple_rte_array[newrelid]);
 #if PG_VERSION_NUM < 110000
-	if (expandBranch)
+	if (child->partkey)
+	{
+		childrte->inh = true;
 		return;
+	}
 #endif
 	appinfo = makeNode(AppendRelInfo);
 
@@ -434,6 +443,95 @@ hypo_find_inheritance_children(hypoTable *parent)
 
 	return list;
 }
+
+/*
+ * Returns a list of relation OIDs including the given rel plus
+ * all relations that inherit from it, directly or indirectly.
+ * Optionally, it also returns the number of parents found for
+ * each such relation within the inheritance tree rooted at the
+ * given rel.  This is heavily inspired on find_all_inheritors().
+ */
+#if PG_VERSION_NUM < 110000
+static List *
+hypo_find_all_inheritors(Oid parentrelId, List **numparents)
+{
+	/* hash table for O(1) rel_oid -> rel_numparents cell lookup */
+	HTAB	   *seen_rels;
+	HASHCTL		ctl;
+	List	   *rels_list,
+			   *rel_numparents;
+	ListCell   *l;
+
+	memset(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(SeenRelsEntry);
+	ctl.hcxt = CurrentMemoryContext;
+
+	seen_rels = hash_create("find_all_inheritors temporary table",
+							32, /* start small and extend */
+							&ctl,
+							HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	/*
+	 * We build a list starting with the given rel and adding all direct and
+	 * indirect children.  We can use a single list as both the record of
+	 * already-found rels and the agenda of rels yet to be scanned for more
+	 * children.  This is a bit tricky but works because the foreach() macro
+	 * doesn't fetch the next list element until the bottom of the loop.
+	 */
+	rels_list = list_make1_oid(parentrelId);
+	rel_numparents = list_make1_int(0);
+
+	foreach(l, rels_list)
+	{
+		Oid			currentrel = lfirst_oid(l);
+		List	   *currentchildren;
+		ListCell   *lc;
+		hypoTable  *parent = hypo_find_table(currentrel, false);
+
+		/* Get the direct children of this rel */
+		currentchildren = hypo_find_inheritance_children(parent);
+
+		/*
+		 * Add to the queue only those children not already seen. This avoids
+		 * making duplicate entries in case of multiple inheritance paths from
+		 * the same parent.  (It'll also keep us from getting into an infinite
+		 * loop, though theoretically there can't be any cycles in the
+		 * inheritance graph anyway.)
+		 */
+		foreach(lc, currentchildren)
+		{
+			Oid			child_oid = lfirst_oid(lc);
+			bool		found;
+			SeenRelsEntry *hash_entry;
+
+			hash_entry = hash_search(seen_rels, &child_oid, HASH_ENTER, &found);
+			if (found)
+			{
+				/* if the rel is already there, bump number-of-parents counter */
+				lfirst_int(hash_entry->numparents_cell)++;
+			}
+			else
+			{
+				/* if it's not there, add it. expect 1 parent, initially. */
+				rels_list = lappend_oid(rels_list, child_oid);
+				rel_numparents = lappend_int(rel_numparents, 1);
+				hash_entry->numparents_cell = rel_numparents->tail;
+			}
+		}
+	}
+
+	if (numparents)
+		*numparents = rel_numparents;
+	else
+		list_free(rel_numparents);
+
+	hash_destroy(seen_rels);
+
+	return rels_list;
+}
+#endif
+
 
 /*
  * Given a (root) hypothetically partitioned table, generate the

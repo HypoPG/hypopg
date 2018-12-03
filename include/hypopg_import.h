@@ -84,6 +84,15 @@ typedef struct PartitionRangeBound
 	bool		lower;			/* this is the lower (vs upper) bound */
 } PartitionRangeBound;
 
+/*
+ * Entry of a hash table used in find_all_inheritors. See below.
+ */
+typedef struct SeenRelsEntry
+{
+	Oid         rel_id;         /* relation oid */
+	ListCell   *numparents_cell;    /* corresponding list cell */
+} SeenRelsEntry;
+
 PartitionRangeBound *make_one_range_bound(PartitionKey key, int index,
 		List *datums, bool lower);
 int partition_bound_bsearch(PartitionKey key, PartitionBoundInfo boundinfo,
