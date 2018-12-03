@@ -169,3 +169,106 @@ Some other convenience functions are available:
 
 - **hypopg_drop_index(oid)**: remove the given hypothetical index
 - **hypopg_reset()**: remove all hypothetical indexes
+
+Hypothetical partitioning
+-------------------------
+
+.. note::
+
+   This is only possible for PostgreSQL 10 an above.  The partitioning
+   possibilites depend on the PostgreSQL version.  For instance, you can't
+   create a hypothetical hash partition on using PostgreSQL 10.
+
+
+For clarity, let's see how it works with a very simple test case:
+
+.. code-block:: psql
+
+  CREATE TABLE hypo_part_range (id integer, val text);
+  INSERT INTO hypo_part_range SELECT i, 'line ' || i FROM generate_series(1, 29999) i;
+
+This is a simple table, containing some rows and without indexes.  Trying to
+retrieve a row will do as expected:
+
+.. code-block:: psql
+
+  EXPLAIN SELECT * FROM hypo_part_range WHERE id = 2;
+                              QUERY PLAN                            
+  ------------------------------------------------------------------
+   Seq Scan on hypo_part_range  (cost=0.00..537.99 rows=1 width=14)
+     Filter: (id = 2)
+  (2 rows)
+
+Now, let's try to hypothetically partition this table with a range partitioning
+scheme.  For that, we have two functions:
+
+- **hypopg_partition_table**: it has two mandatory arguments.  The first
+  argument is the table to be hypothetically partitioned, and the second is the
+  `PARTITION BY` clause, as you would use for declarative partitioning
+- **hypopg_add_partition**: it has two mandatory arguments, and one optional.
+  The first mandatory argument is the partitiong name, the second is the
+  `PARTITION OF` clause, and the optional argument is a `PARTITION BY` clause,
+  if you want to declare multiple level of partitioning.
+
+For instance:
+
+.. code-block:: psql
+
+  SELECT hypopg_partition_table('hypo_part_range', 'PARTITION BY RANGE(id)');
+  SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
+  SELECT tablename FROM hypopg_add_partition('hypo_part_range_10000_20000', 'PARTITION OF hypo_part_range FOR VALUES FROM (10000) TO (20000)');
+  SELECT tablename FROM hypopg_add_partition('hypo_part_range_20000_30000', 'PARTITION OF hypo_part_range FOR VALUES FROM (20000) TO (30000)');
+
+.. note::
+
+  If you need to declare bounds on a textual column, the dollar-quoting
+  notation will be helpful.  For instance:
+
+  .. code-block:: psql
+
+    SELECT hypopg_add_partition('p_name', $$PARTITION OF tbl FOR VALUES FROM 'aaa' TO 'aab'$$);
+
+Now, let's see what happens if we try to retrieve a row of the hypothetically
+partitioned table:
+
+.. code-block:: psql
+
+  EXPLAIN SELECT * FROM hypo_part_range WHERE id = 2;
+                                             QUERY PLAN                                           
+  ------------------------------------------------------------------------------------------------
+   Append  (cost=0.00..179.95 rows=1 width=14)
+     ->  Seq Scan on hypo_part_range hypo_part_range_1_10000  (cost=0.00..179.95 rows=1 width=14)
+
+We can see that since there's an Append node, PostgreSQL acted as if the table
+was partitioned, and that all but one partition was pruned.
+
+It's also possible to create a hypothetical index on the hypothetical
+partitions:
+
+
+.. code-block:: psql
+
+  SELECT hypopg_create_index('CREATE INDEX on hypo_part_range_1_10000 (id)');
+                                                                    QUERY PLAN                                                                   
+  -----------------------------------------------------------------------------------------------------------------------------------------------
+   Append  (cost=0.04..8.06 rows=1 width=14)
+     ->  Index Scan using <258199>btree_hypo_part_range_1_10000_id on hypo_part_range hypo_part_range_1_10000  (cost=0.04..8.05 rows=1 width=14)
+           Index Cond: (id = 2)
+  (3 rows)
+
+Manipulate hypothetical partitions
+----------------------------------
+
+Some other convenience functions are available:
+
+- **hypopg_table()**: list all hypothetical partitions that have been created
+- **hypopg_analyze(regclass, fraction)**: perform an operation similar to
+  ANALYZE on a hypothetically partitioned table, to get better estimates
+- **hypopg_statistic(): returns the list of statistics gathered by
+  previous runs of **hypopg_analyze**, in the same format as `pg_statistic`.
+  For an easier reading, the view **hypopg_stats** exists, which returns the
+  data in the same format as `pg_stats`
+- **hypopg_drop_table(oid)**: delete a previously created partition, or unpartition
+  a hypothetically partitioned table (including the stored statistics if any)
+- **hypopg_reset_table()**: remove all previously created hypothetical partition
+  (inclufing the stored statistics if any)

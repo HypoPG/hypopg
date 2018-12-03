@@ -5,8 +5,10 @@ HypoPG
 
 `HypoPG <https://github.com/HypoPG/hypopg>`_ is a `PostgreSQL
 <https://postgresql.org>`_ extension, adding support for
-:ref:`hypothetical_indexes`.
-It's compatible with **PostgreSQL 9.2 and above**.
+:ref:`hypothetical_objects`: :ref:`hypothetical_indexes` and
+:ref:`hypothetical_partitioning` (only for pg10 and above).
+
+This extension is compatible with **PostgreSQL 9.2 and above**.
 
 .. note::
 
@@ -20,7 +22,7 @@ It's compatible with **PostgreSQL 9.2 and above**.
    :maxdepth: 1
    :caption: Contents:
 
-   hypothetical_indexes
+   hypothetical_objects
    installation
    usage
    contributing
