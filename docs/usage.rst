@@ -264,7 +264,7 @@ Some other convenience functions are available:
 - **hypopg_table()**: list all hypothetical partitions that have been created
 - **hypopg_analyze(regclass, fraction)**: perform an operation similar to
   ANALYZE on a hypothetically partitioned table, to get better estimates
-- **hypopg_statistic(): returns the list of statistics gathered by
+- **hypopg_statistic()**: returns the list of statistics gathered by
   previous runs of **hypopg_analyze**, in the same format as `pg_statistic`.
   For an easier reading, the view **hypopg_stats** exists, which returns the
   data in the same format as `pg_stats`
