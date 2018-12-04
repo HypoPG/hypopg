@@ -1,6 +1,23 @@
 Changelog
 =========
 
+WIP version 2.0.0:
+------------------
+
+  **New features**:
+
+    - Add support for hypothetical partitioning, for pg10+ (Hosoya Yuzuko,
+      Julien Rouhaud)
+
+  **Miscellaneous**
+
+  - Use a dedicated MemoryContext to store hypothetical objects
+
+  **Bug fixes:**
+
+    - Call previous explain_get_index_name_hook if it was setup
+    - add hypopg_reset_index() SQL function
+
 2018-05-30 version 1.1.2:
 -------------------------
 
