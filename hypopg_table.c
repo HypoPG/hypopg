@@ -3530,6 +3530,9 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	/* Process any pending invalidation */
 	hypo_process_inval();
 
+	if (!hypoTables)
+		hypo_initTablesHash();
+
 	if (!PG_ARGISNULL(2))
 		partition_by = TextDatumGetCString(PG_GETARG_TEXT_PP(2));
 
