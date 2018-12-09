@@ -57,6 +57,9 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#if PG_VERSION_NUM >= 110000
+#include "utils/partcache.h"
+#endif
 #if PG_VERSION_NUM >= 90500
 #include "utils/ruleutils.h"
 #endif
@@ -98,6 +101,8 @@ static void hypo_estimate_index_simple(hypoIndex *entry,
 static void hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel,
 								PlannerInfo *root);
 static int hypo_estimate_index_colsize(hypoIndex *entry, int col);
+static void hypo_index_check_uniqueness_compatibility(IndexStmt *stmt,
+		Oid relid, hypoIndex *entry);
 static void hypo_index_pfree(hypoIndex *entry);
 static bool hypo_index_remove(Oid indexid);
 static const hypoIndex *hypo_index_store_parsetree(IndexStmt *node,
@@ -399,6 +404,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 	node = transformIndexStmt(relid, node, queryString);
 
 	nkeycolumns = list_length(node->indexParams);
+
 #if PG_VERSION_NUM >= 110000
 	if (list_intersection(node->indexParams, node->indexIncludingParams) != NIL)
 		ereport(ERROR,
@@ -689,6 +695,14 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 				   errmsg("hypopg: index creation on system columns is not supported")));
 		}
 
+#if PG_VERSION_NUM >= 110000
+	/*
+	 * check for uniqueness compatibility with (hypothetically) partitioned
+	 * tables
+	 */
+	hypo_index_check_uniqueness_compatibility(node, relid, entry);
+#endif
+
 
 #if PG_VERSION_NUM >= 110000
 		attn = nkeycolumns;
@@ -906,6 +920,107 @@ hypo_index_remove(Oid indexid)
 	}
 	return false;
 }
+
+#if PG_VERSION_NUM >= 110000
+/*
+ * If this table is partitioned and we're creating a unique index or a
+ * primary key, make sure that the indexed columns are part of the
+ * partition key.  Otherwise it would be possible to violate uniqueness by
+ * putting values that ought to be unique in different partitions.
+ *
+ * We could lift this limitation if we had global indexes, but those have
+ * their own problems, so this is a useful feature combination.
+ *
+ * Heavily inspired on DefineIndex.
+ */
+static void
+hypo_index_check_uniqueness_compatibility(IndexStmt *stmt, Oid relid,
+		hypoIndex *entry)
+{
+	PartitionKey	key = NULL;
+	Relation		rel;
+	const char	   *extra;
+	int				i;
+
+	if (!stmt->unique)
+		return;
+
+	rel = relation_open(relid, AccessShareLock);
+
+	if (hypo_table_oid_is_hypothetical(relid))
+	{
+		hypoTable *table = hypo_find_table(relid, false);
+
+		key = table->partkey;
+		extra = "hypothetical ";
+	}
+	else
+	{
+		key = rel->rd_partkey;
+		extra = "";
+	}
+
+	if (!key)
+	{
+		relation_close(rel, AccessShareLock);
+		return;
+	}
+
+	/*
+	 * A partitioned table can have unique indexes, as long as all the
+	 * columns in the partition key appear in the unique key.  A
+	 * partition-local index can enforce global uniqueness iff the PK
+	 * value completely determines the partition that a row is in.
+	 *
+	 * Thus, verify that all the columns in the partition key appear in
+	 * the unique key definition.
+	 */
+	for (i = 0; i < key->partnatts; i++)
+	{
+		bool		found = false;
+		int			j;
+		const char *constraint_type = "unique";
+
+		/*
+		 * It may be possible to support UNIQUE constraints when partition
+		 * keys are expressions, but is it worth it?  Give up for now.
+		 */
+		if (key->partattrs[i] == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("hypopg: unsupported %s hypothetical constraint with %spartition key definition",
+							constraint_type, extra),
+					 errdetail("%s hypothetical constraints cannot be used when %spartition keys include expressions.",
+							   constraint_type, extra)));
+
+		for (j = 0; j < entry->nkeycolumns; j++)
+		{
+			if (key->partattrs[i] == entry->indexkeys[j])
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+		{
+			Form_pg_attribute att;
+
+			att = TupleDescAttr(RelationGetDescr(rel), key->partattrs[i] - 1);
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("hypopg: insufficient columns in %s hypothetical constraint definition",
+							constraint_type),
+					 errdetail("%s hypothetical constraint on table \"%s\" lacks column \"%s\" which is part of the %spartition key.",
+							   constraint_type, RelationGetRelationName(rel),
+							   NameStr(att->attname),
+							   extra)));
+		}
+	}
+
+	relation_close(rel, AccessShareLock);
+
+}
+#endif
 
 /* pfree all allocated memory for within an hypoIndex and the entry itself. */
 static void

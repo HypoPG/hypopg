@@ -223,3 +223,55 @@ SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON hypo_part_multi_
 ERROR:  hypopg: cannot add hypothetical index on non-leaf or non-root hypothetical partition
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON hypo_part_multi_1_q1 (dpt)');
 ERROR:  hypopg: cannot add hypothetical index on non-leaf or non-root hypothetical partition
+-- pk constraint check
+CREATE TABLE t_pk(id integer primary key, val text) PARTITION BY LIST (val);
+ERROR:  insufficient columns in PRIMARY KEY constraint definition
+DETAIL:  PRIMARY KEY constraint on table "t_pk" lacks column "val" which is part of the partition key.
+CREATE TABLE hypo_t_pk(id integer primary key, val text);
+SELECT hypopg_partition_table('hypo_t_pk', 'PARTITION BY LIST (val)');
+ERROR:  hypopg: insufficient columns in unique constraint definition
+DETAIL:  unique constraint on table "hypo_t_pk" lacks column "val" which is part of the hypothetical partition key.
+DROP TABLE hypo_t_pk;
+-- unique constraint check
+CREATE TABLE t_unique(id integer, val text) PARTITION BY LIST (val);
+CREATE UNIQUE INDEX ON t_unique(id);
+ERROR:  insufficient columns in UNIQUE constraint definition
+DETAIL:  UNIQUE constraint on table "t_unique" lacks column "val" which is part of the partition key.
+CREATE TABLE hypo_t_unique(id integer, val text);
+CREATE UNIQUE INDEX ON hypo_t_unique(id);
+SELECT hypopg_partition_table('hypo_t_unique', 'PARTITION BY LIST (val)');
+ERROR:  hypopg: insufficient columns in unique constraint definition
+DETAIL:  unique constraint on table "hypo_t_unique" lacks column "val" which is part of the hypothetical partition key.
+DROP TABLE hypo_t_unique;
+CREATE TABLE hypo_t_unique(id integer, val text);
+SELECT count(*) FROM hypopg_create_index('CREATE UNIQUE INDEX on hypo_t_unique (id)');
+ count 
+-------
+     1
+(1 row)
+
+SELECT hypopg_partition_table('hypo_t_unique', 'PARTITION BY LIST (val)');
+ERROR:  hypopg: insufficient columns in unique hypothetical constraint definition
+DETAIL:  unique constraint on table "hypo_t_unique" lacks column "val" which is part of the hypothetical partition key.
+DROP TABLE hypo_t_unique;
+CREATE TABLE hypo_t_unique(id integer, val text);
+SELECT hypopg_partition_table('hypo_t_unique', 'PARTITION BY LIST (val)');
+ hypopg_partition_table 
+------------------------
+ t
+(1 row)
+
+SELECT count(*) FROM hypopg_create_index('CREATE UNIQUE INDEX on hypo_t_unique (id)');
+ERROR:  hypopg: insufficient columns in unique hypothetical constraint definition
+DETAIL:  unique hypothetical constraint on table "hypo_t_unique" lacks column "val" which is part of the hypothetical partition key.
+DROP TABLE t_unique;
+DROP TABLE hypo_t_unique;
+-- constraint exclusion check
+CREATE TABLE t_constrext(c circle, val text, EXCLUDE USING gist(c WITH &&)) PARTITION BY LIST (val);
+ERROR:  exclusion constraints are not supported on partitioned tables
+LINE 1: CREATE TABLE t_constrext(c circle, val text, EXCLUDE USING g...
+                                                     ^
+CREATE TABLE hypo_t_constrext(c circle, val text, EXCLUDE USING gist(c WITH &&));
+SELECT hypopg_partition_table('hypo_t_constrext', 'PARTITION BY LIST (val)');
+ERROR:  exclusion constraints are not supported on hypothetically partitioned tables
+DROP TABLE hypo_t_constrext;

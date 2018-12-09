@@ -25,6 +25,7 @@
 #include "access/hash.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "catalog/pg_class.h"
@@ -63,6 +64,7 @@
 
 #include "include/hypopg.h"
 #include "include/hypopg_analyze.h"
+#include "include/hypopg_index.h"
 #include "include/hypopg_table.h"
 
 /*--- Variables exported ---*/
@@ -113,6 +115,9 @@ static Oid hypo_get_default_partition_oid(hypoTable *parent);
 static char *hypo_get_partbounddef(hypoTable *entry);
 static char *hypo_get_partkeydef(hypoTable *entry);
 static hypoTable *hypo_newTable(Oid parentid);
+#if PG_VERSION_NUM >= 110000
+static void hypo_table_check_constraints_compatibility(hypoTable *table);
+#endif
 static hypoTable *hypo_table_find_parent_oid(Oid parentid);
 static void hypo_table_pfree(hypoTable *entry, bool freeFieldsOnly);
 static hypoTable *hypo_table_store_parsetree(CreateStmt *node,
@@ -1654,6 +1659,162 @@ hypo_get_partkeydef(hypoTable *entry)
 	return buf.data;
 }
 
+#if PG_VERSION_NUM >= 110000
+/*
+ * check if the wanted  PARTITION BY clause is compatible with any exiting
+ * unique/pk index.
+ *
+ * Heavily inspired on get_relation_info and DefineIndex
+ */
+static void
+hypo_table_check_constraints_compatibility(hypoTable *table)
+{
+	Relation		rel = heap_open(table->rootid, AccessShareLock);
+	List		   *idxlist = RelationGetIndexList(rel);
+	PartitionKey	key = table->partkey;
+	ListCell	   *lc;
+
+	/* The partey should have already been generated */
+	Assert(key);
+
+	/* adapted from DefineIndex */
+	foreach(lc, idxlist)
+	{
+		Relation		idxRel = index_open(lfirst_oid(lc), AccessShareLock);
+		IndexInfo	   *indexInfo = BuildIndexInfo(idxRel);
+		Form_pg_index	index;
+		int				i;
+
+		index = idxRel->rd_index;
+
+		if (!IndexIsValid(index))
+		{
+			index_close(idxRel, AccessShareLock);
+			continue;
+		}
+
+		if (index->indisexclusion)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("exclusion constraints are not supported on hypothetically partitioned tables")));
+		}
+
+		if (!index->indisunique)
+		{
+			index_close(idxRel, AccessShareLock);
+			continue;
+		}
+
+		/*
+		 * A partitioned table can have unique indexes, as long as all the
+		 * columns in the partition key appear in the unique key.  A
+		 * partition-local index can enforce global uniqueness iff the PK
+		 * value completely determines the partition that a row is in.
+		 *
+		 * Thus, verify that all the columns in the partition key appear in
+		 * the unique key definition.
+		 */
+		for (i = 0; i < key->partnatts; i++)
+		{
+			bool		found = false;
+			int			j;
+			/* FIXME detect the real constraint type */
+			const char *constraint_type = "unique";
+
+			/*
+			 * It may be possible to support UNIQUE constraints when partition
+			 * keys are expressions, but is it worth it?  Give up for now.
+			 */
+			if (key->partattrs[i] == 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("hypopg: unsupported %s constraint with hypothetical partition key definition",
+								constraint_type),
+						 errdetail("%s constraints cannot be used when hypothetical partition keys include expressions.",
+								   constraint_type)));
+
+			for (j = 0; j < indexInfo->ii_NumIndexAttrs; j++)
+			{
+				if (key->partattrs[i] == indexInfo->ii_IndexAttrNumbers[j])
+				{
+					found = true;
+					break;
+				}
+			}
+			if (!found)
+			{
+				Form_pg_attribute att;
+
+				att = TupleDescAttr(RelationGetDescr(rel), key->partattrs[i] - 1);
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("hypopg: insufficient columns in %s constraint definition",
+								constraint_type),
+						 errdetail("%s constraint on table \"%s\" lacks column \"%s\" which is part of the hypothetical partition key.",
+								   constraint_type, RelationGetRelationName(rel),
+								   NameStr(att->attname))));
+			}
+
+		}
+
+		index_close(idxRel, AccessShareLock);
+	}
+
+	/* same, but for hypothetical indexes */
+	foreach(lc, hypoIndexes)
+	{
+		hypoIndex  *idx = (hypoIndex *) lfirst(lc);
+		int			i;
+
+		if ((idx->relid != table->rootid && idx->relid != table->oid) ||
+				!idx->unique)
+			continue;
+
+		for (i = 0; i < key->partnatts; i++)
+		{
+			bool		found = false;
+			int			j;
+			/* FIXME detect the real constraint type */
+			const char *constraint_type = "unique";
+
+			if (key->partattrs[i] == 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("hypopg: unsupported hypothetical %s constraint with hypothetical partition key definition",
+								constraint_type),
+						 errdetail("hypothetical %s constraints cannot be used when hypothetical partition keys include expressions.",
+								   constraint_type)));
+
+			for (j = 0; j < idx->nkeycolumns; j++)
+			{
+				if (key->partattrs[i] == idx->indexkeys[j])
+				{
+					found = true;
+					break;
+				}
+			}
+			if (!found)
+			{
+				Form_pg_attribute att;
+
+				att = TupleDescAttr(RelationGetDescr(rel), key->partattrs[i] - 1);
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("hypopg: insufficient columns in %s hypothetical constraint definition",
+								constraint_type),
+						 errdetail("%s constraint on table \"%s\" lacks column \"%s\" which is part of the hypothetical partition key.",
+								   constraint_type, RelationGetRelationName(rel),
+								   NameStr(att->attname))));
+			}
+
+		}
+	}
+
+	heap_close(rel, AccessShareLock);
+}
+#endif
+
 /*
  * palloc a new hypoTable, and give it a new OID, and some other global stuff.
  */
@@ -1959,7 +2120,16 @@ hypo_table_store_parsetree(CreateStmt *node, const char *queryString,
 
 		/* The CreateStmt specified a PARTITION BY clause, store it */
 		if (stmt->partspec)
+		{
 			hypo_generate_partkey(stmt, rootid, entry);
+#if PG_VERSION_NUM >= 110000
+			/*
+			 * Make sure that the partitioning clause is compatible with
+			 * existing constraints
+			 */
+			hypo_table_check_constraints_compatibility(entry);
+#endif
+		}
 
 		if (boundspec)
 		{

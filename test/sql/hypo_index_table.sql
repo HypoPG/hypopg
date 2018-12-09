@@ -100,3 +100,39 @@ SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON part_multi_1_q1 
 
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON hypo_part_multi_1 (dpt)');
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON hypo_part_multi_1_q1 (dpt)');
+
+-- pk constraint check
+CREATE TABLE t_pk(id integer primary key, val text) PARTITION BY LIST (val);
+
+CREATE TABLE hypo_t_pk(id integer primary key, val text);
+SELECT hypopg_partition_table('hypo_t_pk', 'PARTITION BY LIST (val)');
+
+DROP TABLE hypo_t_pk;
+-- unique constraint check
+CREATE TABLE t_unique(id integer, val text) PARTITION BY LIST (val);
+CREATE UNIQUE INDEX ON t_unique(id);
+
+CREATE TABLE hypo_t_unique(id integer, val text);
+CREATE UNIQUE INDEX ON hypo_t_unique(id);
+SELECT hypopg_partition_table('hypo_t_unique', 'PARTITION BY LIST (val)');
+
+DROP TABLE hypo_t_unique;
+CREATE TABLE hypo_t_unique(id integer, val text);
+SELECT count(*) FROM hypopg_create_index('CREATE UNIQUE INDEX on hypo_t_unique (id)');
+SELECT hypopg_partition_table('hypo_t_unique', 'PARTITION BY LIST (val)');
+
+DROP TABLE hypo_t_unique;
+CREATE TABLE hypo_t_unique(id integer, val text);
+SELECT hypopg_partition_table('hypo_t_unique', 'PARTITION BY LIST (val)');
+SELECT count(*) FROM hypopg_create_index('CREATE UNIQUE INDEX on hypo_t_unique (id)');
+
+DROP TABLE t_unique;
+DROP TABLE hypo_t_unique;
+
+-- constraint exclusion check
+CREATE TABLE t_constrext(c circle, val text, EXCLUDE USING gist(c WITH &&)) PARTITION BY LIST (val);
+
+CREATE TABLE hypo_t_constrext(c circle, val text, EXCLUDE USING gist(c WITH &&));
+SELECT hypopg_partition_table('hypo_t_constrext', 'PARTITION BY LIST (val)');
+
+DROP TABLE hypo_t_constrext;
