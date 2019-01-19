@@ -1190,20 +1190,24 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 								   opclassform->opcintype,
 								   opclassform->opcintype,
 								   procnum);
-		if (!OidIsValid(funcid))
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					 errmsg("operator class \"%s\" of access method %s is missing support function %d for type %s",
-							NameStr(opclassform->opcname),
+		if (!OidIsValid(funcid)) 
 #if PG_VERSION_NUM >= 110000
-							(key->strategy == PARTITION_STRATEGY_HASH) ?
-							"hash" : "btree",
+			ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					errmsg("operator class \"%s\" of access method %s is missing support function %d for type %s",
+						NameStr(opclassform->opcname),
+						(key->strategy == PARTITION_STRATEGY_HASH) ? "hash" : "btree",
+						procnum,
+						format_type_be(opclassform->opcintype))));
 #else
-							"btree",
-#endif
-							procnum,
-							format_type_be(opclassform->opcintype))));
-
+			ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					errmsg("operator class \"%s\" of access method %s is missing support function %d for type %s",
+						NameStr(opclassform->opcname),
+						"btree",
+						procnum,
+						format_type_be(opclassform->opcintype))));
+#endif	
 		fmgr_info(funcid, &key->partsupfunc[i]);
 
 		/* Collation */
