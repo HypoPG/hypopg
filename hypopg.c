@@ -60,10 +60,10 @@ static List *pending_invals = NIL; /* List of interesting OID for which we
 
 /*--- Functions --- */
 
-void		_PG_init(void);
-void		_PG_fini(void);
+PGDLLEXPORT void		_PG_init(void);
+PGDLLEXPORT void		_PG_fini(void);
 
-Datum		hypopg_reset(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum		hypopg_reset(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(hypopg_reset);
 
@@ -719,7 +719,7 @@ hypo_set_rel_pathlist_hook(PlannerInfo *root,
 /*
  * Reset all stored entries.
  */
-Datum
+PGDLLEXPORT Datum
 hypopg_reset(PG_FUNCTION_ARGS)
 {
 	hypo_index_reset();
