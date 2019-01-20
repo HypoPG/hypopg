@@ -1194,7 +1194,7 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 #if PG_VERSION_NUM >= 110000
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					errmsg("operator class \"%s\" of access method %s is missing support function %d for type %s",
+					 errmsg("operator class \"%s\" of access method %s is missing support function %d for type %s",
 							NameStr(opclassform->opcname),
 							(key->strategy == PARTITION_STRATEGY_HASH) ? "hash" : "btree",
 							procnum,
@@ -1202,7 +1202,7 @@ hypo_generate_partkey(CreateStmt *stmt, Oid parentid, hypoTable *entry)
 #else
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					errmsg("operator class \"%s\" of access method %s is missing support function %d for type %s",
+					 errmsg("operator class \"%s\" of access method %s is missing support function %d for type %s",
 							NameStr(opclassform->opcname),
 							"btree",
 							procnum,
