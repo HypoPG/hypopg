@@ -12,6 +12,7 @@ WIP version 2.0.0:
   **Miscellaneous**
 
   - Use a dedicated MemoryContext to store hypothetical objects
+  - Fix compatibility on Windows (Godwottery)
 
   **Bug fixes:**
 

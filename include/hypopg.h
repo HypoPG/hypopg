@@ -20,12 +20,13 @@
 #include "include/hypopg_import.h"
 
 extern bool isExplain;
+
 /* GUC for enabling / disabling hypopg during EXPLAIN */
 extern bool hypo_is_enabled;
 extern MemoryContext HypoMemoryContext;
 
-Oid hypo_getNewOid(Oid relid);
-void hypo_process_inval(void);
-void hypo_clear_inval(void);
+Oid			hypo_getNewOid(Oid relid);
+void		hypo_process_inval(void);
+void		hypo_clear_inval(void);
 
 #endif

@@ -43,27 +43,27 @@ PG_MODULE_MAGIC;
 
 typedef struct hypoWalkerContext
 {
-	bool explain_found;
+	bool		explain_found;
 } hypoWalkerContext;
 
 /*--- Variables exported ---*/
 
-bool isExplain;
-bool hypo_is_enabled;
+bool		isExplain;
+bool		hypo_is_enabled;
 MemoryContext HypoMemoryContext;
 
 /*--- Variables not exported ---*/
 
-static List *pending_invals = NIL; /* List of interesting OID for which we
-									  received inval messages that need to be
-									  processed. */
+static List *pending_invals = NIL;	/* List of interesting OID for which we
+									 * received inval messages that need to be
+									 * processed. */
 
 /*--- Functions --- */
 
-PGDLLEXPORT void		_PG_init(void);
-PGDLLEXPORT void		_PG_fini(void);
+PGDLLEXPORT void _PG_init(void);
+PGDLLEXPORT void _PG_fini(void);
 
-PGDLLEXPORT Datum		hypopg_reset(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum hypopg_reset(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(hypopg_reset);
 
@@ -100,15 +100,15 @@ static void hypo_get_relation_info_hook(PlannerInfo *root,
 static get_relation_info_hook_type prev_get_relation_info_hook = NULL;
 
 static bool hypo_get_relation_stats_hook(PlannerInfo *root,
-		RangeTblEntry *rte,
-		AttrNumber attnum,
-		VariableStatData *vardata);
+							 RangeTblEntry *rte,
+							 AttrNumber attnum,
+							 VariableStatData *vardata);
 static get_relation_stats_hook_type prev_get_relation_stats_hook = NULL;
 #if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
 static void hypo_set_rel_pathlist_hook(PlannerInfo *root,
-									   RelOptInfo *rel,
-									   Index rti,
-									   RangeTblEntry *rte);
+						   RelOptInfo *rel,
+						   Index rti,
+						   RangeTblEntry *rte);
 static set_rel_pathlist_hook_type prev_set_rel_pathlist_hook = NULL;
 #endif
 
@@ -144,15 +144,15 @@ _PG_init(void)
 #endif
 
 	HypoMemoryContext = AllocSetContextCreate(TopMemoryContext,
-			"HypoPG context",
+											  "HypoPG context",
 #if PG_VERSION_NUM >= 90600
-			ALLOCSET_DEFAULT_SIZES
+											  ALLOCSET_DEFAULT_SIZES
 #else
-			ALLOCSET_DEFAULT_MINSIZE,
-			ALLOCSET_DEFAULT_INITSIZE,
-			ALLOCSET_DEFAULT_MAXSIZE
+											  ALLOCSET_DEFAULT_MINSIZE,
+											  ALLOCSET_DEFAULT_INITSIZE,
+											  ALLOCSET_DEFAULT_MAXSIZE
 #endif
-			);
+		);
 
 	DefineCustomBoolVariable("hypopg.enabled",
 							 "Enable / Disable hypopg",
@@ -240,15 +240,15 @@ hypo_utility_hook(
 				  DestReceiver *dest,
 				  char *completionTag)
 {
-	hypoWalkerContext hypo_context = { 0 };
+	hypoWalkerContext hypo_context = {0};
 
 	hypo_query_walker(
 #if PG_VERSION_NUM >= 100000
-						    (Node *) pstmt,
+					  (Node *) pstmt,
 #else
-						    parsetree,
+					  parsetree,
 #endif
-						    &hypo_context);
+					  &hypo_context);
 
 	isExplain = hypo_context.explain_found;
 
@@ -291,7 +291,7 @@ hypo_utility_hook(
 #endif
 								params,
 #if PG_VERSION_NUM >= 100000
-						  queryEnv,
+								queryEnv,
 #endif
 #if PG_VERSION_NUM < 90300
 								isTopLevel,
@@ -313,9 +313,10 @@ hypo_query_walker(Node *node, hypoWalkerContext *context)
 	{
 		case T_PlannedStmt:
 			{
-				Node *stmt = ((PlannedStmt *) node)->utilityStmt;
+				Node	   *stmt = ((PlannedStmt *) node)->utilityStmt;
+
 				return query_or_expression_tree_walker(stmt, hypo_query_walker,
-						context, QTW_IGNORE_RANGE_TABLE);
+													   context, QTW_IGNORE_RANGE_TABLE);
 			}
 		case T_ExplainStmt:
 			{
@@ -332,6 +333,7 @@ hypo_query_walker(Node *node, hypoWalkerContext *context)
 
 				context->explain_found = true;
 #if PG_VERSION_NUM >= 100000
+
 				/*
 				 * No point in looking for unhandled command type if there are
 				 * no hypothetical partitions
@@ -348,35 +350,36 @@ hypo_query_walker(Node *node, hypoWalkerContext *context)
 #if PG_VERSION_NUM >= 100000
 		case T_Query:
 			{
-				Query *query = (Query *) node;
+				Query	   *query = (Query *) node;
 
 				Assert(context->explain_found);
 
 				if (context->explain_found &&
-						(query->commandType == CMD_UPDATE ||
-						 query->commandType == CMD_DELETE)
-				)
+					(query->commandType == CMD_UPDATE ||
+					 query->commandType == CMD_DELETE)
+					)
 				{
 					RangeTblEntry *rte = rt_fetch(query->resultRelation,
-							query->rtable);
+												  query->rtable);
 
 					if (hypo_table_oid_is_hypothetical(rte->relid))
 						elog(ERROR, "hypopg: UPDATE and DELETE on hypothetically"
-								" partitioned tables are not supported");
+							 " partitioned tables are not supported");
 				}
 
 				if (query->cteList)
 				{
-					ListCell *lc;
+					ListCell   *lc;
 
 					foreach(lc, query->cteList)
 					{
 						CommonTableExpr *cte = (CommonTableExpr *) lfirst(lc);
+
 						hypo_query_walker(cte->ctequery, context);
 					}
 				}
 				return query_or_expression_tree_walker(node, hypo_query_walker,
-						context, QTW_IGNORE_RANGE_TABLE);
+													   context, QTW_IGNORE_RANGE_TABLE);
 			}
 			break;
 #endif
@@ -385,7 +388,7 @@ hypo_query_walker(Node *node, hypoWalkerContext *context)
 	}
 
 	return query_or_expression_tree_walker(node, hypo_query_walker, context,
-			QTW_IGNORE_RANGE_TABLE);
+										   QTW_IGNORE_RANGE_TABLE);
 }
 
 /*
@@ -403,7 +406,7 @@ static void
 hypo_CacheRelCallback(Datum arg, Oid relid)
 {
 #if PG_VERSION_NUM >= 100000
-	hypoTable *entry;
+	hypoTable  *entry;
 
 	entry = hypo_find_table(relid, true);
 	if (entry)
@@ -428,7 +431,7 @@ void
 hypo_process_inval(void)
 {
 #if PG_VERSION_NUM >= 100000
-	ListCell *lc;
+	ListCell   *lc;
 
 	Assert(IsTransactionState());
 
@@ -446,13 +449,13 @@ hypo_process_inval(void)
 	{
 		Oid			relid = lfirst_oid(lc);
 		hypoTable  *entry = hypo_find_table(relid, false);
-		char   *relname = get_rel_name(relid);
-		bool	found = false;
+		char	   *relname = get_rel_name(relid);
+		bool		found = false;
 
 		/*
 		 * The pending invalidations should be filtered and recorded after
-		 * removing an entry, and should always be processed before any attempt
-		 * to remove a hypothetical object, so we shoudl always find a
+		 * removing an entry, and should always be processed before any
+		 * attempt to remove a hypothetical object, so we shoudl always find a
 		 * hypoTable at this point.
 		 */
 		Assert(entry);
@@ -462,7 +465,7 @@ hypo_process_inval(void)
 
 		if (found)
 			elog(DEBUG1, "hypopg: hypo_process_inval removed table %s (%d)",
-					relname, relid);
+				 relname, relid);
 	}
 
 	list_free(pending_invals);
@@ -502,14 +505,14 @@ hypo_executorEnd_hook(QueryDesc *queryDesc)
  */
 static void
 hypo_get_relation_info_hook(PlannerInfo *root,
-			    Oid relationObjectId,
-			    bool inhparent,
-			    RelOptInfo *rel)
+							Oid relationObjectId,
+							bool inhparent,
+							RelOptInfo *rel)
 {
 	Relation	relation;
 #if PG_VERSION_NUM >= 100000
 	RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
-	bool  hypopart = false;
+	bool		hypopart = false;
 #endif
 
 	if (HYPO_ENABLED())
@@ -517,9 +520,10 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 
 #if PG_VERSION_NUM >= 100000
 		hypopart = hypo_table_oid_is_hypothetical(relationObjectId);
+
 		/*
-		 * If this relation is table we want to partition hypothetical,
-		 * inject hypothetical partitioning
+		 * If this relation is table we want to partition hypothetical, inject
+		 * hypothetical partitioning
 		 */
 		if (hypopart)
 			hypo_injectHypotheticalPartitioning(root, relationObjectId, rel);
@@ -534,10 +538,11 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 #endif
 			)
 		{
-			ListCell  *lc;
-			Oid  parentId = relationObjectId;
+			ListCell   *lc;
+			Oid			parentId = relationObjectId;
 
 #if PG_VERSION_NUM >= 100000
+
 			/*
 			 * If this rel is a partition, get root table oid to look for
 			 * hypothetical indexes.
@@ -548,19 +553,20 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 				{
 					/*
 					 * when this is a real partition, we have to search root
-					 * table from PlannerInfo to get root table oid.  when this
-					 * is a hypothetical partition, root table oid is equal to
-					 * relationObjectId, so nothing to do
+					 * table from PlannerInfo to get root table oid.  when
+					 * this is a hypothetical partition, root table oid is
+					 * equal to relationObjectId, so nothing to do
 					 */
 					AppendRelInfo *appinfo;
 					RelOptInfo *parentrel = rel;
+
 					do
 					{
 #if PG_VERSION_NUM >= 110000
 						appinfo = root->append_rel_array[parentrel->relid];
 #else
 						appinfo = find_childrel_appendrelinfo(root, parentrel);
-#endif		/* pg10 only */
+#endif							/* pg10 only */
 						parentrel = find_base_rel(root, appinfo->parent_relid);
 					} while (parentrel->reloptkind == RELOPT_OTHER_MEMBER_REL);
 					parentId = appinfo->parent_reloid;
@@ -580,7 +586,7 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 #if PG_VERSION_NUM >= 110000
 					&& !rel->part_scheme
 #endif
-				)
+					)
 				{
 					oid = parentId;
 				}
@@ -590,17 +596,19 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 				{
 					oid = relationObjectId;
 				}
+
 				/*
 				 * check for hypothetical index on hypothetical leaf partition
 				 */
 				else if (hypo_table_oid_is_hypothetical(relationObjectId) &&
-						HYPO_TABLE_RTE_HAS_HYPOOID(rte) &&
-						entry->relid == HYPO_TABLE_RTE_GET_HYPOOID(rte)
-				)
+						 HYPO_TABLE_RTE_HAS_HYPOOID(rte) &&
+						 entry->relid == HYPO_TABLE_RTE_GET_HYPOOID(rte)
+					)
 				{
 					oid = HYPO_TABLE_RTE_GET_HYPOOID(rte);
 				}
 #endif
+
 				/*
 				 * hypothetical index found, add it to the relation's
 				 * indextlist
@@ -619,17 +627,17 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 
 static bool
 hypo_get_relation_stats_hook(PlannerInfo *root,
-		RangeTblEntry *rte,
-		AttrNumber attnum,
-		VariableStatData *vardata)
+							 RangeTblEntry *rte,
+							 AttrNumber attnum,
+							 VariableStatData *vardata)
 {
 #if PG_VERSION_NUM < 100000
 	return false;
 #else
-	Oid poid = InvalidOid;
+	Oid			poid = InvalidOid;
 	hypoStatsKey key;
 	hypoStatsEntry *entry;
-	bool found;
+	bool		found;
 
 	/* Nothing to do if it's not a plain relation */
 	if (rte->rtekind != RTE_RELATION)
@@ -638,8 +646,8 @@ hypo_get_relation_stats_hook(PlannerInfo *root,
 	/*
 	 * If this is a root table hypothetically partitioned, we have to retrieve
 	 * the pg_statistic row ourselves, even if no hypopg_analyze has been
-	 * performed yet, because postgres will search for an entry with stainherit
-	 * = true, which won't exist.
+	 * performed yet, because postgres will search for an entry with
+	 * stainherit = true, which won't exist.
 	 */
 	if (HYPO_RTE_IS_TAGGED(rte) && (!HYPO_TABLE_RTE_HAS_HYPOOID(rte)))
 	{
@@ -708,8 +716,8 @@ hypo_set_rel_pathlist_hook(PlannerInfo *root,
 						   Index rti,
 						   RangeTblEntry *rte)
 {
-	if(HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid) && rte->relkind == 'r')
-		hypo_markDummyIfExcluded(root,rel,rti,rte);
+	if (HYPO_ENABLED() && hypo_table_oid_is_hypothetical(rte->relid) && rte->relkind == 'r')
+		hypo_markDummyIfExcluded(root, rel, rti, rte);
 
 	if (prev_set_rel_pathlist_hook)
 		prev_set_rel_pathlist_hook(root, rel, rti, rte);

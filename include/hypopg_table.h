@@ -47,54 +47,55 @@ typedef struct hypoTable
 {
 	Oid			oid;			/* hypothetical table unique identifier */
 	Oid			parentid;		/* In case of partition, it's direct parent,
-								   otherwise InvalidOid */
+								 * otherwise InvalidOid */
 	Oid			rootid;			/* In case of partition, its root parentid,
-								   otherwise its own oid */
-	char		tablename[NAMEDATALEN];		/* hypothetical partition name, or
-								   original table name for root parititon */
+								 * otherwise its own oid */
+	char		tablename[NAMEDATALEN]; /* hypothetical partition name, or
+										 * original table name for root
+										 * parititon */
 	Oid			namespace;		/* Oid of the hypothetical table's schema */
 	bool		set_tuples;		/* tuples are already set or not */
-	int			tuples;		    /* number of tuples of this table */
+	int			tuples;			/* number of tuples of this table */
 	List	   *children;		/* unsorted OIDs of children, if any */
-	PartitionBoundSpec	*boundspec;	/* Needed to generate the PartitionDesc and
-									   PartitionBoundInfo */
-	PartitionKey	partkey;	/* Needed to generate the partition key
-								   expressions and deparsing */
-	Oid		   *partopclass;	/* oid of partkey's element opclass, needed for
-								   deparsing the key */
+	PartitionBoundSpec *boundspec;	/* Needed to generate the PartitionDesc
+									 * and PartitionBoundInfo */
+	PartitionKey partkey;		/* Needed to generate the partition key
+								 * expressions and deparsing */
+	Oid		   *partopclass;	/* oid of partkey's element opclass, needed
+								 * for deparsing the key */
 	bool		valid;
 } hypoTable;
 
 /* List of hypothetic partitions for current backend */
-extern HTAB	   *hypoTables;
+extern HTAB *hypoTables;
 #else
 #define HYPO_PARTITION_NOT_SUPPORTED() elog(ERROR, "hypopg: Hypothetical partitioning requires PostgreSQl 10 or above"); PG_RETURN_VOID();
 #endif
 
 /*--- Functions --- */
 
-void hypo_table_reset(void);
+void		hypo_table_reset(void);
 
-PGDLLEXPORT Datum		hypopg_table(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum		hypopg_add_partition(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum		hypopg_drop_table(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum		hypopg_partition_table(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum		hypopg_reset_table(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum hypopg_table(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum hypopg_add_partition(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum hypopg_drop_table(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum hypopg_partition_table(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum hypopg_reset_table(PG_FUNCTION_ARGS);
 
 #if PG_VERSION_NUM >= 100000
-hypoTable *hypo_find_table(Oid tableid, bool missing_ok);
+hypoTable  *hypo_find_table(Oid tableid, bool missing_ok);
 List *hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
-					    hypoTable *parent, bool force_generation);
-List *hypo_get_partition_quals_inh(hypoTable *part, hypoTable *parent);
-hypoTable *hypo_table_name_get_entry(const char *name);
-bool hypo_table_oid_is_hypothetical(Oid relid);
-bool hypo_table_remove(Oid tableid, hypoTable *parent, bool deep);
+							   hypoTable *parent, bool force_generation);
+List	   *hypo_get_partition_quals_inh(hypoTable *part, hypoTable *parent);
+hypoTable  *hypo_table_name_get_entry(const char *name);
+bool		hypo_table_oid_is_hypothetical(Oid relid);
+bool		hypo_table_remove(Oid tableid, hypoTable *parent, bool deep);
 void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
-					 Oid relationObjectId,
-					 RelOptInfo *rel);
+									Oid relationObjectId,
+									RelOptInfo *rel);
 #if PG_VERSION_NUM < 110000
 void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
-							  Index rti, RangeTblEntry *rte);
+						 Index rti, RangeTblEntry *rte);
 #endif
 #endif
 

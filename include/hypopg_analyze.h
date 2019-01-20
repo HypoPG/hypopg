@@ -23,30 +23,30 @@
 
 typedef struct hypoStatsKey
 {
-	Oid relid;
-	AttrNumber attnum;
+	Oid			relid;
+	AttrNumber	attnum;
 } hypoStatsKey;
 
 typedef struct hypoStatsEntry
 {
 	hypoStatsKey key;
-	HeapTuple statsTuple;
+	HeapTuple	statsTuple;
 } hypoStatsEntry;
 
 /*--- Variables exported ---*/
 
 /* Hash table storing the partition-level statistics */
 extern HTAB *hypoStatsHash;
-#endif			/* PG_VERSION_NUM >= 100000 */
+#endif							/* PG_VERSION_NUM >= 100000 */
 
 Selectivity hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel,
-		List *clauses, Oid table_relid, Oid parent_oid);
+							List *clauses, Oid table_relid, Oid parent_oid);
 
 /*--- Functions --- */
-PGDLLEXPORT Datum		hypopg_analyze(PG_FUNCTION_ARGS);
-PGDLLEXPORT Datum		hypopg_statistic(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum hypopg_analyze(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum hypopg_statistic(PG_FUNCTION_ARGS);
 #if PG_VERSION_NUM >= 100000
 PGDLLEXPORT void hypo_stat_remove(Oid tableid);
 #endif
 
-#endif			/* _HYPOPG_ANALYZE_H_ */
+#endif							/* _HYPOPG_ANALYZE_H_ */
