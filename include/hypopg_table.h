@@ -75,11 +75,11 @@ extern HTAB	   *hypoTables;
 
 void hypo_table_reset(void);
 
-Datum		hypopg_table(PG_FUNCTION_ARGS);
-Datum		hypopg_add_partition(PG_FUNCTION_ARGS);
-Datum		hypopg_drop_table(PG_FUNCTION_ARGS);
-Datum		hypopg_partition_table(PG_FUNCTION_ARGS);
-Datum		hypopg_reset_table(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum		hypopg_table(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum		hypopg_add_partition(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum		hypopg_drop_table(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum		hypopg_partition_table(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum		hypopg_reset_table(PG_FUNCTION_ARGS);
 
 #if PG_VERSION_NUM >= 100000
 hypoTable *hypo_find_table(Oid tableid, bool missing_ok);

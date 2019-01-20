@@ -317,10 +317,9 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 				fraction);
 
 	/* And make sure we don't overflow the compute_stats function */
-	if (SPI_processed >= INT32_MAX)
+	if (SPI_processed >= PG_INT32_MAX)
 		elog(ERROR, "hypopg: the %f fraction of rows to analyze is too high."
-				" At most %d rows must be computed.",
-				fraction, INT32_MAX);
+				" At most %d rows must be computed.", fraction, PG_INT32_MAX);
 
 	numrows = (int) SPI_processed;
 	/*
@@ -337,7 +336,7 @@ static void hypo_do_analyze_partition(Relation onerel, Relation pgstats,
 	 * responsible to make sure that whatever they store into the VacAttrStats
 	 * structure is allocated in anl_context.
 	 */
-	if (numrows >= 100 && numrows < INT32_MAX)
+	if (numrows >= 100 && numrows < PG_INT32_MAX)
 	{
 		MemoryContext col_context,
 					old_context;

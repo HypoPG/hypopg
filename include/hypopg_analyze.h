@@ -43,11 +43,10 @@ Selectivity hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel,
 		List *clauses, Oid table_relid, Oid parent_oid);
 
 /*--- Functions --- */
-
-Datum		hypopg_analyze(PG_FUNCTION_ARGS);
-Datum		hypopg_statistic(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum		hypopg_analyze(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum		hypopg_statistic(PG_FUNCTION_ARGS);
 #if PG_VERSION_NUM >= 100000
-void hypo_stat_remove(Oid tableid);
+PGDLLEXPORT void hypo_stat_remove(Oid tableid);
 #endif
 
 #endif			/* _HYPOPG_ANALYZE_H_ */
