@@ -101,8 +101,10 @@ static void hypo_estimate_index_simple(hypoIndex *entry,
 static void hypo_estimate_index(hypoIndex *entry, RelOptInfo *rel,
 								PlannerInfo *root);
 static int hypo_estimate_index_colsize(hypoIndex *entry, int col);
+#if PG_VERSION_NUM >= 110000
 static void hypo_index_check_uniqueness_compatibility(IndexStmt *stmt,
 		Oid relid, hypoIndex *entry);
+#endif
 static void hypo_index_pfree(hypoIndex *entry);
 static bool hypo_index_remove(Oid indexid);
 static const hypoIndex *hypo_index_store_parsetree(IndexStmt *node,
