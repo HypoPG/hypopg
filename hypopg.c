@@ -605,6 +605,7 @@ hypo_get_relation_info_hook(PlannerInfo *root,
 						 entry->relid == HYPO_TABLE_RTE_GET_HYPOOID(rte)
 					)
 				{
+					Assert(rte->rtekind != RTE_CTE);
 					oid = HYPO_TABLE_RTE_GET_HYPOOID(rte);
 				}
 #endif

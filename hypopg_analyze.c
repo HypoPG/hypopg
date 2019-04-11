@@ -142,6 +142,8 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 
 		/* add the hypothetical partition oid to be able to get the
 		 * constraints */
+		Assert(save_rte->rtekind != RTE_CTE);
+		Assert(rte->rtekind != RTE_CTE);
 		HYPO_TABLE_RTE_COPY_HYPOOID_FROM_RTE(rte, save_rte);
 		root_dummy->parse->rtable = list_make1(rte);
 
@@ -152,6 +154,7 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 		 * and remove the hypothetical oid to avoid computing selectivity with
 		 * hypothetical statistics
 		 */
+		Assert(rte->rtekind != RTE_CTE);
 		HYPO_TABLE_RTE_CLEAR_HYPOOID(rte);
 		root_dummy->parse->rtable = list_make1(rte);
 	}
@@ -165,7 +168,11 @@ hypo_clauselist_selectivity(PlannerInfo *root, RelOptInfo *rel, List *clauses,
 
 		/* modify RangeTableEntry to be able to get correct oid */
 		if (HYPO_TABLE_RTE_HAS_HYPOOID(rt))  /* Is this a hypothetical partition? */
+		{
+			Assert(dummyrte->rtekind != RTE_CTE);
+			Assert(rt->rtekind != RTE_CTE);
 			HYPO_TABLE_RTE_COPY_HYPOOID_FROM_RTE(dummyrte, rt);
+		}
 		else if (rt)
 			dummyrte->relid = rt->relid;
 		else

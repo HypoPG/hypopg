@@ -25,13 +25,13 @@
 #define HYPO_RTI_IS_TAGGED(rti, root) (planner_rt_fetch(rti, root)->security_barrier)
 #define HYPO_TAG_RTI(rti, root) (planner_rt_fetch(rti, root)->security_barrier = true)
 
-/* XXX maybe use a mapping array here instead of rte->values_lists*/
-#define HYPO_TABLE_RTE_HAS_HYPOOID(rte) (rte && (rte->values_lists != NIL))
-#define HYPO_TABLE_RTE_GET_HYPOOID(rte) linitial_oid(rte->values_lists)
-#define HYPO_TABLE_RTI_GET_HYPOOID(rti, root) linitial_oid(planner_rt_fetch(rti, root)->values_lists)
-#define HYPO_TABLE_RTE_SET_HYPOOID(rte, oid) rte->values_lists = list_make1_oid(oid)
-#define HYPO_TABLE_RTE_CLEAR_HYPOOID(rte) rte->values_lists = NIL
-#define HYPO_TABLE_RTE_COPY_HYPOOID_FROM_RTE(target, src) target->values_lists = src->values_lists
+/* XXX maybe use a mapping array here instead of rte->ctelevelsup*/
+#define HYPO_TABLE_RTE_HAS_HYPOOID(rte) (rte && (rte->ctelevelsup != InvalidOid))
+#define HYPO_TABLE_RTE_GET_HYPOOID(rte) (rte->ctelevelsup)
+#define HYPO_TABLE_RTI_GET_HYPOOID(rti, root) (planner_rt_fetch(rti, root)->ctelevelsup)
+#define HYPO_TABLE_RTE_SET_HYPOOID(rte, oid) (rte->ctelevelsup = oid)
+#define HYPO_TABLE_RTE_CLEAR_HYPOOID(rte) rte->ctelevelsup = InvalidOid
+#define HYPO_TABLE_RTE_COPY_HYPOOID_FROM_RTE(target, src) target->ctelevelsup = src->ctelevelsup
 
 #include "optimizer/paths.h"
 

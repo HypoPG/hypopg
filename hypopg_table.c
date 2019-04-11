@@ -369,6 +369,7 @@ hypo_expand_single_inheritance_child(PlannerInfo *root, Oid relationObjectId,
 		childrte->alias = makeNode(Alias);
 	childrte->alias->aliasname = child->tablename;
 
+	Assert(rte->rtekind != RTE_CTE);
 	if (expandBranch)
 		HYPO_TABLE_RTE_SET_HYPOOID(childrte, branch->oid);
 	//partitionOID
@@ -2497,7 +2498,7 @@ hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 		double		pages;
 		int			total_modulus = 1;
 
-		Assert(HYPO_TABLE_RTE_HAS_HYPOOID(rte));
+		Assert(rte->rtekind != RTE_CTE && HYPO_TABLE_RTE_HAS_HYPOOID(rte));
 		partoid = HYPO_TABLE_RTE_GET_HYPOOID(rte);
 		part = hypo_find_table(partoid, false);
 #if PG_VERSION_NUM >= 110000
@@ -2610,6 +2611,7 @@ hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
 	hypoTable  *parent = hypo_find_table(part->parentid, false);
 
 	Assert(hypo_table_oid_is_hypothetical(rte->relid));
+	Assert(rte->rtekind != RTE_CTE);
 	Assert(rte->relkind == 'r');
 
 	/* get its partition constraints */
@@ -2703,6 +2705,7 @@ hypo_get_partition_constraints(PlannerInfo *root, RelOptInfo *rel,
 	hypoTable  *child;
 	List	   *pcqual;
 
+	Assert((planner_rt_fetch(rel->relid, root))->rtekind != RTE_CTE);
 	childOid = HYPO_TABLE_RTI_GET_HYPOOID(rel->relid, root);
 	child = hypo_find_table(childOid, false);
 
