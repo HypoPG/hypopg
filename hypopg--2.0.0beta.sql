@@ -6,8 +6,6 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION hypopg" to load this file. \quit
 
-SET client_encoding = 'UTF8';
-
 -- General functions
 --
 
