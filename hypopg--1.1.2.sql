@@ -6,6 +6,8 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION hypopg" to load this file. \quit
 
+SET LOCAL client_encoding = 'UTF8';
+
 CREATE FUNCTION hypopg_reset()
     RETURNS void
     LANGUAGE C VOLATILE COST 100
