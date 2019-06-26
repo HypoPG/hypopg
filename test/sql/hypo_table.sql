@@ -232,6 +232,39 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash t1, hypo_part_hash t2 WHERE t1.
 EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
 EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = t2.id;
 
+-- Runtime partition pruning
+-- -------------------------
+
+-- 6B.0 Add function to easily simulate runtime partitioning
+CREATE FUNCTION hypo_number_one() RETURNS integer AS
+$_$
+BEGIN
+    RETURN 1;
+END;
+$_$ LANGUAGE plpgsql STABLE;
+-- 6B.1 disable runtime partition pruning
+SET enable_partition_pruning to false;
+-- 6B.2 simple case
+EXPLAIN (COSTS OFF) SELECT * FROM part_range WHERE id = hypo_number_one();
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = hypo_number_one();
+-- 6B.3 CTE
+EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+-- 6B.4 InitPlan
+EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s);
+EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s);
+-- 6B.5 enable runtime partition pruning
+SET enable_partition_pruning to true;
+-- 6B.6 simple case
+EXPLAIN (COSTS OFF) SELECT * FROM part_range WHERE id = hypo_number_one();
+EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = hypo_number_one();
+-- 6B.7 CTE
+EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+-- 6B.8 InitPlan
+EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s);
+EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s);
+
 -- Tests for sanity checks
 -- =======================
 
