@@ -2,7 +2,7 @@
 -- ====================================="
 -- Real tables
 -- -----------
--- 1. Range partition
+-- 1.1. Range partition
 DROP TABLE IF EXISTS part_range;
 NOTICE:  table "part_range" does not exist, skipping
 CREATE TABLE part_range (id integer, val text) PARTITION BY RANGE (id);
@@ -10,7 +10,7 @@ CREATE TABLE part_range_1_10000 PARTITION OF part_range FOR VALUES FROM (1) TO (
 CREATE TABLE part_range_10000_20000 PARTITION OF part_range FOR VALUES FROM (10000) TO (20000);
 CREATE TABLE part_range_20000_30000 PARTITION OF part_range FOR VALUES FROM (20000) TO (30000);
 INSERT INTO part_range SELECT i, 'line ' || i FROM generate_series(1, 29999) i;
--- 2. List partitioning
+-- 1.2. List partitioning
 DROP TABLE IF EXISTS part_list;
 NOTICE:  table "part_list" does not exist, skipping
 CREATE TABLE part_list (id integer, id_key integer, val text) PARTITION BY LIST (id_key);
@@ -18,7 +18,7 @@ CREATE TABLE part_list_4_5_6_8_10 PARTITION OF part_list FOR VALUES IN (4, 5, 6,
 CREATE TABLE part_list_7_9 PARTITION OF part_list FOR VALUES IN (7, 9);
 CREATE TABLE part_list_1_2_3 PARTITION OF part_list FOR VALUES IN (1, 2, 3);
 INSERT INTO part_list SELECT i, (i % 9) + 1, 'line ' || i FROM generate_series(1, 50000) i;
--- 3. Hash partitioning
+-- 1.3. Hash partitioning
 DROP TABLE IF EXISTS part_hash;
 NOTICE:  table "part_hash" does not exist, skipping
 CREATE TABLE part_hash (id integer, val text) PARTITION BY HASH (id);
@@ -33,7 +33,7 @@ CREATE TABLE part_hash_2 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REM
 CREATE TABLE part_hash_1 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 1);
 CREATE TABLE part_hash_0 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0);
 INSERT INTO part_hash SELECT i, 'line ' || i FROM generate_series(1, 90000) i;
--- 4. Multi level range
+-- 1.4. Multi level range
 DROP TABLE IF EXISTS part_multi;
 NOTICE:  table "part_multi" does not exist, skipping
 CREATE TABLE part_multi(dpt smallint, dt date, val text) PARTITION BY LIST (dpt);
@@ -66,14 +66,14 @@ CREATE TABLE part_multi_def_def PARTITION OF part_multi_def DEFAULT;
 INSERT INTO part_multi select (i%4)+1, '2015-01-01'::date + interval '1 day' * (i%500), 'val ' || i FROM generate_series(1,50000) i;
 -- Hypothetical tables
 -- -------------------
--- 0. Dropping any hypothetical object
+-- 2.0. Dropping any hypothetical object
 SELECT * FROM hypopg_reset();
  hypopg_reset 
 --------------
  
 (1 row)
 
--- 1. Range partition
+-- 2.1. Range partition
 DROP TABLE IF EXISTS hypo_part_range;
 NOTICE:  table "hypo_part_range" does not exist, skipping
 CREATE TABLE hypo_part_range (id integer, val text);
@@ -102,7 +102,7 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_range_20000_30000', 'PARTI
  hypo_part_range_20000_30000
 (1 row)
 
--- 2. List partitioning
+-- 2.2. List partitioning
 DROP TABLE IF EXISTS hypo_part_list;
 NOTICE:  table "hypo_part_list" does not exist, skipping
 CREATE TABLE hypo_part_list (id integer, id_key integer, val text);
@@ -131,7 +131,7 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_list_1_2_3', 'PARTITION OF
  hypo_part_list_1_2_3
 (1 row)
 
--- 3. Hash partitioning
+-- 2.3. Hash partitioning
 DROP TABLE IF EXISTS hypo_part_hash;
 NOTICE:  table "hypo_part_hash" does not exist, skipping
 CREATE TABLE hypo_part_hash (id integer, val text);
@@ -202,7 +202,7 @@ SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0', 'PARTITION OF hyp
  hypo_part_hash_0
 (1 row)
 
--- 4. Multi level range
+-- 2.4. Multi level range
 DROP TABLE IF EXISTS hypo_part_multi;
 NOTICE:  table "hypo_part_multi" does not exist, skipping
 CREATE TABLE hypo_part_multi(dpt smallint, dt date, val text);
@@ -469,7 +469,7 @@ ORDER BY tablename COLLATE "C";
 -- --------------
 -- Real tables
 -- -----------
--- 1. Range partitioning
+-- 3.1. Range partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM part_range;
                 QUERY PLAN                
 ------------------------------------------
@@ -497,7 +497,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_range WHERE id < 15000;
          Filter: (id < 15000)
 (5 rows)
 
--- 2. List partitioning
+-- 3.2. List partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM part_list;
                QUERY PLAN               
 ----------------------------------------
@@ -549,7 +549,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_list WHERE id_key = 7;
          Filter: (id_key = 7)
 (3 rows)
 
--- 3. Hash partitioning
+-- 3.3. Hash partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM part_hash;
           QUERY PLAN           
 -------------------------------
@@ -600,7 +600,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash WHERE id < 15000;
          Filter: (id < 15000)
 (21 rows)
 
--- 4. Multi level range
+-- 3.4. Multi level range
 EXPLAIN (COSTS OFF) SELECT * FROM part_multi;
               QUERY PLAN              
 --------------------------------------
@@ -668,7 +668,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi WHERE dt >= '2015-01-05' AND dt < '
 
 -- Hypothetical tables
 -- -------------------
--- 1. Range partitioning
+-- 4.1. Range partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range;
                           QUERY PLAN                           
 ---------------------------------------------------------------
@@ -696,7 +696,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id < 15000;
          Filter: (id < 15000)
 (5 rows)
 
--- 2. List partitioning
+-- 4.2. List partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_list;
                          QUERY PLAN                         
 ------------------------------------------------------------
@@ -748,7 +748,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_list WHERE id_key = 7;
          Filter: (id_key = 7)
 (3 rows)
 
--- 3. Hash partitioning
+-- 4.3. Hash partitioning
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash;
                     QUERY PLAN                     
 ---------------------------------------------------
@@ -799,7 +799,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash WHERE id < 15000;
          Filter: (id < 15000)
 (21 rows)
 
--- 4. Multi level range
+-- 4.4. Multi level range
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi;
                         QUERY PLAN                         
 -----------------------------------------------------------
@@ -869,7 +869,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi WHERE dt >= '2015-01-05' AND d
 -- ------------
 -- Simple joins
 -- ------------
--- 1. Real tables
+-- 5.1. Real tables
 EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
                         QUERY PLAN                         
 -----------------------------------------------------------
@@ -963,7 +963,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, part_multi t2 WHERE t1.dpt = t2
                      Filter: (dpt = 2)
 (24 rows)
 
--- 2. Hypothetical tables
+-- 5.2. Hypothetical tables
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
                                 QUERY PLAN                                 
 ---------------------------------------------------------------------------
@@ -1057,7 +1057,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_multi t1, hypo_part_multi t2 WHERE t
                      Filter: (dpt = 2)
 (24 rows)
 
--- 3. Real tables and hypothetical tables
+-- 5.3. Real tables and hypothetical tables
 EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
                              QUERY PLAN                              
 ---------------------------------------------------------------------
@@ -1156,7 +1156,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_multi t1, hypo_part_multi t2 WHERE t1.dpt
 -- enable partitionwise join
 -- -------------------------
 SET enable_partitionwise_join to true;
--- 1. Real tables
+-- 6.1. Real tables
 EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
                         QUERY PLAN                         
 -----------------------------------------------------------
@@ -1231,7 +1231,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, part_hash t2 WHERE t1.id = t2.id
                ->  Seq Scan on part_hash_9 t2_9
 (51 rows)
 
--- 2. Hypothetical tables
+-- 6.2. Hypothetical tables
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
                                        QUERY PLAN                                       
 ----------------------------------------------------------------------------------------
@@ -1306,7 +1306,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_hash t1, hypo_part_hash t2 WHERE t1.
                ->  Seq Scan on hypo_part_hash hypo_part_hash_9_1
 (51 rows)
 
--- 3. Real tables and hypothetical tables
+-- 6.3. Real tables and hypothetical tables
 EXPLAIN (COSTS OFF) SELECT * FROM part_range t1, hypo_part_range t2 WHERE t1.id = t2.id and t1.id < 15000;
                               QUERY PLAN                               
 -----------------------------------------------------------------------
@@ -1383,27 +1383,27 @@ EXPLAIN (COSTS OFF) SELECT * FROM part_hash t1, hypo_part_hash t2 WHERE t1.id = 
 
 -- Tests for sanity checks
 -- =======================
--- Duplicate name
+-- 7.1 Duplicate name
 CREATE TABLE part_range_1_10000 PARTITION OF part_range FOR VALUES FROM (1) TO (10000);
 ERROR:  relation "part_range_1_10000" already exists
 SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
 ERROR:  hypopg: hypothetical table hypo_part_range_1_10000 already exists
--- Overlapping range bounds
+-- 7.2 Overlapping range bounds
 CREATE TABLE part_range_1_10000_dup PARTITION OF part_range FOR VALUES FROM (1) TO (10000);
 ERROR:  partition "part_range_1_10000_dup" would overlap partition "part_range_1_10000"
 SELECT tablename FROM hypopg_add_partition('hypo_part_range_1_10000_dup', 'PARTITION OF hypo_part_range FOR VALUES FROM (1) TO (10000)');
 ERROR:  hypopg: partition "hypo_part_range_1_10000_dup" would overlap partition "hypo_part_range_1_10000"
--- Overlapping list bounds
+-- 7.3 Overlapping list bounds
 CREATE TABLE part_list_1_2_3_dup PARTITION OF part_list FOR VALUES IN (1, 2, 3);
 ERROR:  partition "part_list_1_2_3_dup" would overlap partition "part_list_1_2_3"
 SELECT tablename FROM hypopg_add_partition('hypo_part_list_1_2_3_dup', 'PARTITION OF hypo_part_list FOR VALUES IN (1, 2, 3)');
 ERROR:  hypopg: partition "hypo_part_list_1_2_3_dup" would overlap partition "hypo_part_list_1_2_3"
--- Overlapping hash bounds
+-- 7.4 Overlapping hash bounds
 CREATE TABLE part_hash_0 PARTITION OF part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0);
 ERROR:  relation "part_hash_0" already exists
 SELECT tablename FROM hypopg_add_partition('hypo_part_hash_0_dup', 'PARTITION OF hypo_part_hash FOR VALUES WITH (MODULUS 10, REMAINDER 0)');
 ERROR:  hypopg: partition "hypo_part_hash_0_dup" would overlap partition "hypo_part_hash_0"
--- Overlapping range bounds, subpartition
+-- 7.5 Overlapping range bounds, subpartition
 CREATE TABLE part_multi_1_q1_a PARTITION OF part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$);
 ERROR:  relation "part_multi_1_q1_a" already exists
 SELECT tablename FROM hypopg_add_partition('hypo_part_multi_1_q1_a_dup', 'PARTITION OF hypo_part_multi_1_q1 FOR VALUES FROM ($$2015-01-01$$) TO ($$2015-02-01$$)');
@@ -1461,20 +1461,20 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = 42;
 
 -- no UPDATE/DELETE test
 -- =====================
--- simple UPDATE and DELETE on hypothetically partitioned table
+-- 8.1 simple UPDATE and DELETE on hypothetically partitioned table
 EXPLAIN (COSTS OFF) UPDATE hypo_part_range set id = id;
 ERROR:  hypopg: UPDATE and DELETE on hypothetically partitioned tables are not supported
 EXPLAIN DELETE FROM hypo_part_range WHERE id = 42;
 ERROR:  hypopg: UPDATE and DELETE on hypothetically partitioned tables are not supported
--- UPDATE and DELETE on hypothetically partitioned table inside CTE
+-- 8.2 UPDATE and DELETE on hypothetically partitioned table inside CTE
 EXPLAIN (COSTS OFF) WITH s AS (UPDATE hypo_part_range set id = id returning *) SELECT 1;
 ERROR:  hypopg: UPDATE and DELETE on hypothetically partitioned tables are not supported
 EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM hypo_part_range WHERE id = 42 returning *) SELECT 1;
 ERROR:  hypopg: UPDATE and DELETE on hypothetically partitioned tables are not supported
--- UPDATE and DELETE involving hypothetically partitioned table, but on regular
--- tables
+-- 8.3 UPDATE and DELETE involving hypothetically partitioned table, but on
+-- regular tables
 CREATE TABLE foo(id integer);
--- UPDATE on non hypothetically partitioned table but having a hypothetically
+-- 8.4 UPDATE on non hypothetically partitioned table but having a hypothetically
 -- partitioned table joined
 EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from hypo_part_range WHERE foo.id = hypo_part_range.id AND hypo_part_range.id > 25000 RETURNING *) SELECT 1;
                                        QUERY PLAN                                        
@@ -1491,7 +1491,7 @@ EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from hypo_part_range WHERE 
                                    Filter: (id > 25000)
 (10 rows)
 
--- same but with real table
+-- 8.5 same but with real table
 EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from part_range WHERE foo.id = part_range.id AND part_range.id > 25000 RETURNING *) SELECT 1;
                              QUERY PLAN                             
 --------------------------------------------------------------------
@@ -1507,8 +1507,8 @@ EXPLAIN (COSTS OFF) WITH s AS (UPDATE foo SET id = 0 from part_range WHERE foo.i
                                    Filter: (id > 25000)
 (10 rows)
 
--- DELETE on non hypothetically partitioned table but having a hypothetically
--- partitioned table joined
+-- 8.6 DELETE on non hypothetically partitioned table but having a
+-- hypothetically partitioned table joined
 EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING hypo_part_range WHERE foo.id = hypo_part_range.id AND hypo_part_range.id = 42 RETURNING *) SELECT 1;
                                   QUERY PLAN                                   
 -------------------------------------------------------------------------------
@@ -1523,7 +1523,7 @@ EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING hypo_part_range WHERE foo.i
                        Filter: (id = 42)
 (9 rows)
 
--- same but with real table
+-- 8.7 same but with real table
 EXPLAIN (COSTS OFF) WITH s AS (DELETE FROM foo USING part_range WHERE foo.id = part_range.id AND part_range.id = 42 RETURNING *) SELECT 1;
                         QUERY PLAN                        
 ----------------------------------------------------------

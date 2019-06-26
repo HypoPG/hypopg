@@ -2,7 +2,7 @@
 -- =====================================
 -- Real tables
 -- ------------
--- 1. Range partitioning for hypothetical index
+-- 1.1. Range partitioning for hypothetical index
 DROP TABLE IF EXISTS part_range;
 CREATE TABLE part_range (id integer, val text) PARTITION BY RANGE (id);
 CREATE TABLE part_range_1_10000 PARTITION OF part_range FOR VALUES FROM (1) TO (10000);
@@ -12,10 +12,10 @@ INSERT INTO part_range SELECT i, 'line ' || i FROM generate_series(1, 29999) i;
 
 -- Hypothetical tables
 -- -------------------
--- 0. Dropping any hypothetical object
+-- 2.0. Dropping any hypothetical object
 SELECT * FROM hypopg_reset_index();
 SELECT * FROM hypopg_reset_table();
--- 1. Range partitioning for hypothetical index
+-- 2.1. Range partitioning for hypothetical index
 DROP TABLE IF EXISTS hypo_part_range;
 CREATE TABLE hypo_part_range (id integer, val text);
 INSERT INTO hypo_part_range SELECT i, 'line ' || i FROM generate_series(1, 29999) i;
@@ -33,51 +33,51 @@ SELECT * FROM hypopg_analyze('hypo_part_range',100);
 -- Test hypothetical indexes on hypothetical partitioning behavior
 -- ===============================================================
 
--- Indexes on root partitioning tree
+-- 3.1 Indexes on root partitioning tree
 -- ---------------------------------
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON part_range (id)');
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON hypo_part_range(id)');
 
--- Test on real tables
+-- 3.2 Test on real tables
 -- -------------------
 SELECT COUNT(*) FROM do_explain ('SELECT * FROM part_range WHERE id = 42') e
 WHERE e ~ 'Index.*<\d+>btree.*part_range_1_10000';
 SELECT COUNT(*) FROM do_explain ('SELECT * FROM part_range WHERE id > 28000') e
 WHERE e ~ 'Index.*<\d+>btree.*part_range_20000_30000';
 
--- Test on hypothetical tables
+-- 3.3 Test on hypothetical tables
 -- ---------------------------
 SELECT COUNT(*) FROM do_explain ('SELECT * FROM hypo_part_range WHERE id = 42') e
 WHERE e ~ 'Index.*<\d+>btree.*hypo_part_range_1_10000';
 SELECT COUNT(*) FROM do_explain ('SELECT * FROM hypo_part_range WHERE id > 28000') e
 WHERE e ~ 'Index.*<\d+>btree.*hypo_part_range_20000_30000';
 
--- Indexes on specific partitions
+-- 3.4 Indexes on specific partitions
 -- ------------------------------
 SELECT * FROM hypopg_reset_index();
 
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON part_range_1_10000 (id)');
 SELECT COUNT(*) AS nb FROM hypopg_create_index('CREATE INDEX ON hypo_part_range_1_10000(id)');
 
--- Test on real tables
+-- 3.5 Test on real tables
 -- -------------------
 SELECT COUNT(*) FROM do_explain ('SELECT * FROM part_range WHERE id = 42') e
 WHERE e ~ 'Index.*<\d+>btree.*part_range_1_10000';
 SELECT COUNT(*) FROM do_explain ('SELECT * FROM part_range WHERE id > 28000') e
 WHERE e ~ 'Index.*<\d+>btree.*part_range_20000_30000';
 
--- Test on hypothetical tables
+-- 3.6 Test on hypothetical tables
 -- ---------------------------
 SELECT COUNT(*) FROM do_explain ('SELECT * FROM hypo_part_range WHERE id = 42') e
 WHERE e ~ 'Index.*<\d+>btree.*hypo_part_range_1_10000';
 SELECT COUNT(*) FROM do_explain ('SELECT * FROM hypo_part_range WHERE id > 28000') e
 WHERE e ~ 'Index.*<\d+>btree.*hypo_part_range_20000_30000';
 
--- Sanity checks
+-- 3.7 Sanity checks
 -- -------------
 SELECT * FROM hypopg_reset_index();
 
--- No hypothetical on non-leaf partition
+-- 3.8 No hypothetical on non-leaf partition
 DROP TABLE IF EXISTS part_multi;
 CREATE TABLE part_multi(dpt smallint, dt date, val text) PARTITION BY LIST (dpt);
 CREATE TABLE part_multi_2 PARTITION OF part_multi FOR VALUES IN (2) PARTITION BY RANGE(dt);
