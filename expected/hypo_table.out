@@ -1446,7 +1446,40 @@ EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM hypo_part_range WHERE id = hypo_num
                  Filter: (id = hypo_number_one())
 (9 rows)
 
--- 6B.4 InitPlan
+-- 6B.4 CTE with partitioning underneath an union
+EXPLAIN (COSTS OFF) WITH s AS (SELECT 1 UNION ALL SELECT 2 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ CTE Scan on s
+   CTE s
+     ->  Append
+           ->  Result
+           ->  Append
+                 ->  Seq Scan on part_range_1_10000
+                       Filter: (id = hypo_number_one())
+                 ->  Seq Scan on part_range_10000_20000
+                       Filter: (id = hypo_number_one())
+                 ->  Seq Scan on part_range_20000_30000
+                       Filter: (id = hypo_number_one())
+(11 rows)
+
+EXPLAIN (COSTS OFF) WITH s AS (SELECT 1 UNION ALL SELECT 2 FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ CTE Scan on s
+   CTE s
+     ->  Append
+           ->  Result
+           ->  Append
+                 ->  Seq Scan on hypo_part_range hypo_part_range_1_10000
+                       Filter: (id = hypo_number_one())
+                 ->  Seq Scan on hypo_part_range hypo_part_range_10000_20000
+                       Filter: (id = hypo_number_one())
+                 ->  Seq Scan on hypo_part_range hypo_part_range_20000_30000
+                       Filter: (id = hypo_number_one())
+(11 rows)
+
+-- 6B.5 InitPlan
 EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s);
                         QUERY PLAN                        
 ----------------------------------------------------------
@@ -1479,9 +1512,9 @@ EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM hypo_part_range WHERE id = 
                          Filter: (id = hypo_number_one())
 (11 rows)
 
--- 6B.5 enable runtime partition pruning
+-- 6B.6 enable runtime partition pruning
 SET enable_partition_pruning to true;
--- 6B.6 simple case
+-- 6B.7 simple case
 EXPLAIN (COSTS OFF) SELECT * FROM part_range WHERE id = hypo_number_one();
                 QUERY PLAN                
 ------------------------------------------
@@ -1503,7 +1536,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = hypo_number_one();
          Filter: (id = hypo_number_one())
 (7 rows)
 
--- 6B.7 CTE
+-- 6B.8 CTE
 EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
                     QUERY PLAN                    
 --------------------------------------------------
@@ -1529,7 +1562,37 @@ EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM hypo_part_range WHERE id = hypo_num
                  Filter: (id = hypo_number_one())
 (9 rows)
 
--- 6B.8 InitPlan
+-- 6B.9 CTE with partitioning underneath an union
+EXPLAIN (COSTS OFF) WITH s AS (SELECT 1 UNION ALL SELECT 2 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ CTE Scan on s
+   CTE s
+     ->  Append
+           ->  Result
+           ->  Append
+                 Subplans Removed: 2
+                 ->  Seq Scan on part_range_1_10000
+                       Filter: (id = hypo_number_one())
+(8 rows)
+
+EXPLAIN (COSTS OFF) WITH s AS (SELECT 1 UNION ALL SELECT 2 FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ CTE Scan on s
+   CTE s
+     ->  Append
+           ->  Result
+           ->  Append
+                 ->  Seq Scan on hypo_part_range hypo_part_range_1_10000
+                       Filter: (id = hypo_number_one())
+                 ->  Seq Scan on hypo_part_range hypo_part_range_10000_20000
+                       Filter: (id = hypo_number_one())
+                 ->  Seq Scan on hypo_part_range hypo_part_range_20000_30000
+                       Filter: (id = hypo_number_one())
+(11 rows)
+
+-- 6B.10 InitPlan
 EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s);
                         QUERY PLAN                        
 ----------------------------------------------------------
