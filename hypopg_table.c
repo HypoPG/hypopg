@@ -2642,9 +2642,196 @@ hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
 	/*
 	 * TODO: re-estimate parent size just like set_append_rel_size()
 	 */
+}
+#endif
+#if PG_VERSION_NUM >= 110000 && PG_VERSION_NUM < 120000
 
+/*
+ * Plan tree walking support, that can be called on a PlannedStmt or any Plan
+ * node.  It'll call the given walker function for each Plan found and recurse
+ * in all of them.  This is designed in a similar way to
+ * expression_tree_walker, refer to it for more details about the support
+ * routine and the rule for stopping or continuing the tree walk.
+ *
+ * BE CAREFUL: Please not that at the difference to expression_tree_walker, the
+ * support routine SHOULD NEVER call this function, as it would result in an
+ * endless loop (that should be caught by the stack depth check).
+ */
+bool
+plannedstmt_plan_walker(Node *node, bool (*walker)(), hypoPlanWalkerContext context)
+{
+	ListCell *lc;
+
+	if (node == NULL)
+		return false;
+
+	/* Guard against stack overflow due to overly complex plan tree */
+	check_stack_depth();
+
+	/*
+	 * First, always pass the node to the walker function to ensure that it'll
+	 * see all nodes.  Note that this function should never call
+	 * plannedstmt_plan_walker on the same node again, as it would otherwise
+	 * cause an infinite recursion.
+	 */
+	if (walker(node, context))
+		return true;
+
+	switch (nodeTag(node))
+	{
+		case T_PlannedStmt:
+		{
+			Plan *plan;
+			List *subplans;
+
+			/* plantree */
+			plan = ((PlannedStmt *) node)->planTree;
+
+			if (plannedstmt_plan_walker((Node *) plan, walker, context))
+				return true;
+
+			/* subplans */
+			subplans = ((PlannedStmt *) node)->subplans;
+
+			if (subplans)
+			{
+				foreach(lc, subplans)
+				{
+					Node *subplan = (Node *) lfirst(lc);
+
+					/* some subplan can be NULL */
+					if (!subplan)
+						continue;
+
+					if (plannedstmt_plan_walker(subplan, walker, context))
+						return true;
+				}
+			}
+			break;
+		}
+
+		case T_Append:
+		{
+			Assert(innerPlan(node) == NULL);
+			Assert(outerPlan(node) == NULL);
+
+			foreach(lc, ((Append *) node)->appendplans)
+			{
+				if (plannedstmt_plan_walker((Node *) lfirst(lc), walker,
+							context))
+					return true;
+			}
+			break;
+		}
+
+		case T_MergeAppend:
+		{
+			Assert(innerPlan(node) == NULL);
+			Assert(outerPlan(node) == NULL);
+
+			foreach(lc, ((MergeAppend *) node)->mergeplans)
+			{
+				if (plannedstmt_plan_walker((Node *) lfirst(lc), walker,
+							context))
+					return true;
+			}
+			break;
+		}
+
+		case T_ModifyTable:
+		{
+			Assert(innerPlan(node) == NULL);
+			Assert(outerPlan(node) == NULL);
+
+			foreach(lc, ((ModifyTable *) node)->plans)
+			{
+				if (plannedstmt_plan_walker((Node *) lfirst(lc), walker,
+							context))
+					return true;
+			}
+			break;
+		}
+
+		case T_SubqueryScan:
+		{
+			SubqueryScan *scan = (SubqueryScan *) node;
+
+			Assert(innerPlan(node) == NULL);
+			Assert(outerPlan(node) == NULL);
+
+			if (plannedstmt_plan_walker((Node *) scan->subplan, walker,
+						context))
+				return true;
+			break;
+		}
+
+		case T_BitmapAnd:
+		case T_BitmapOr:
+		{
+			/* 
+			 * plannedstmt_plan_walker will not recurse BitmapAnd path
+			 * and BitmapOr path, because they can't contain Append nodes.
+			 * The purpose of this function is finding Append nodes, so it
+			 * will skip these unneeded nodes on a performance point of view
+			 */
+			break;
+		}
+
+		default:
+		{
+			if (innerPlan(node))
+			{
+				if (plannedstmt_plan_walker((Node *) innerPlan(node), walker,
+							context))
+					return true;
+			}
+
+			if (outerPlan(node))
+			{
+				if (plannedstmt_plan_walker((Node *) outerPlan(node), walker,
+							context))
+					return true;
+			}
+			break;
+		}
+	}
+	return false;
+}
+
+/*
+ * To disable runtime partition pruning, we search Append node from
+ * PlannedStmt using plannedstmt_plan_walker() and hypo_plan_walker().
+ * If we find Append node created by hypothetical partitions, we reset
+ * PartitionPruneInfo.
+*/
+bool
+hypo_plan_walker(Node *node, hypoPlanWalkerContext context)
+{
+	switch (nodeTag(node))
+	{
+		case T_Append:
+		{
+			ListCell *cell;
+			Index rt;
+			RangeTblEntry *rte;
+
+			/* check if this Append node was created by hypothetical partitions */
+			foreach(cell, ((Append *) node)->partitioned_rels)
+			{
+				rt = lfirst_int(cell);
+				rte = list_nth_node(RangeTblEntry, context.rtable, rt-1);
+				if (hypo_table_oid_is_hypothetical(rte->relid))
+					((Append *) node)->part_prune_info = NULL;
+			}
+			return false;
+		}
+
+		default:
+			return false;
+	}
 
 }
+
 #endif
 
 #if PG_VERSION_NUM >= 110000

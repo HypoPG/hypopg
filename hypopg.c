@@ -111,6 +111,11 @@ static void hypo_set_rel_pathlist_hook(PlannerInfo *root,
 						   RangeTblEntry *rte);
 static set_rel_pathlist_hook_type prev_set_rel_pathlist_hook = NULL;
 #endif
+#if PG_VERSION_NUM >= 110000 && PG_VERSION_NUM < 120000
+static PlannedStmt *hypo_planner_hook(Query *parse, int cursorOptions,
+										  ParamListInfo boundParams);
+static planner_hook_type prev_planner_hook = NULL;
+#endif
 
 static bool hypo_query_walker(Node *node, hypoWalkerContext *context);
 static void hypo_CacheRelCallback(Datum arg, Oid relid);
@@ -136,6 +141,10 @@ _PG_init(void)
 #if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
 	prev_set_rel_pathlist_hook = set_rel_pathlist_hook;
 	set_rel_pathlist_hook = hypo_set_rel_pathlist_hook;
+#endif
+#if PG_VERSION_NUM >= 110000 && PG_VERSION_NUM < 120000
+	prev_planner_hook = planner_hook;
+	planner_hook = hypo_planner_hook;
 #endif
 	isExplain = false;
 	hypoIndexes = NIL;
@@ -179,6 +188,9 @@ _PG_fini(void)
 	get_relation_stats_hook = prev_get_relation_stats_hook;
 #if PG_VERSION_NUM >= 100000 && PG_VERSION_NUM < 110000
 	set_rel_pathlist_hook = prev_set_rel_pathlist_hook;
+#endif
+#if PG_VERSION_NUM >= 110000 && PG_VERSION_NUM < 120000
+	planner_hook = prev_planner_hook;
 #endif
 }
 
@@ -722,6 +734,33 @@ hypo_set_rel_pathlist_hook(PlannerInfo *root,
 
 	if (prev_set_rel_pathlist_hook)
 		prev_set_rel_pathlist_hook(root, rel, rti, rte);
+}
+#endif
+
+#if PG_VERSION_NUM >= 110000 && PG_VERSION_NUM < 120000
+/*
+ * If we found partitioned tables, disable runtime partition pruning for pg11.
+ * This restriction will be removed for pg12+.
+ */
+static PlannedStmt *
+hypo_planner_hook(Query *parse, int cursorOptions,
+		ParamListInfo boundParams)
+{
+	PlannedStmt *result;
+	hypoPlanWalkerContext hypo_context;
+
+	if (prev_planner_hook)
+		result = prev_planner_hook(parse, cursorOptions, boundParams);
+	else
+		result = standard_planner(parse, cursorOptions, boundParams);
+
+	if (HYPO_ENABLED() && hypoTables)
+	{
+		hypo_context.rtable = result->rtable;
+		plannedstmt_plan_walker((Node *) result, hypo_plan_walker, hypo_context);
+	}
+
+	return result;
 }
 #endif
 

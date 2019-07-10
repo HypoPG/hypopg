@@ -250,18 +250,24 @@ EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = hypo_number_one();
 -- 6B.3 CTE
 EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
 EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s;
--- 6B.4 InitPlan
+-- 6B.4 CTE with partitioning underneath an union
+EXPLAIN (COSTS OFF) WITH s AS (SELECT 1 UNION ALL SELECT 2 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+EXPLAIN (COSTS OFF) WITH s AS (SELECT 1 UNION ALL SELECT 2 FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+-- 6B.5 InitPlan
 EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s);
 EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s);
--- 6B.5 enable runtime partition pruning
+-- 6B.6 enable runtime partition pruning
 SET enable_partition_pruning to true;
--- 6B.6 simple case
+-- 6B.7 simple case
 EXPLAIN (COSTS OFF) SELECT * FROM part_range WHERE id = hypo_number_one();
 EXPLAIN (COSTS OFF) SELECT * FROM hypo_part_range WHERE id = hypo_number_one();
--- 6B.7 CTE
+-- 6B.8 CTE
 EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
 EXPLAIN (COSTS OFF) WITH s AS (SELECT * FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s;
--- 6B.8 InitPlan
+-- 6B.9 CTE with partitioning underneath an union
+EXPLAIN (COSTS OFF) WITH s AS (SELECT 1 UNION ALL SELECT 2 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+EXPLAIN (COSTS OFF) WITH s AS (SELECT 1 UNION ALL SELECT 2 FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s;
+-- 6B.10 InitPlan
 EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM part_range WHERE id = hypo_number_one()) SELECT * FROM s);
 EXPLAIN (COSTS OFF) SELECT (WITH s AS (SELECT 1 FROM hypo_part_range WHERE id = hypo_number_one()) SELECT * FROM s);
 

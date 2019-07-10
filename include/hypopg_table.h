@@ -97,6 +97,16 @@ void hypo_injectHypotheticalPartitioning(PlannerInfo *root,
 void hypo_markDummyIfExcluded(PlannerInfo *root, RelOptInfo *rel,
 						 Index rti, RangeTblEntry *rte);
 #endif
+#if PG_VERSION_NUM >= 110000 && PG_VERSION_NUM < 120000
+
+typedef struct hypoPlanWalkerContext
+{
+	List *rtable;
+}hypoPlanWalkerContext;
+
+bool plannedstmt_plan_walker(Node *node, bool (*walker)(), hypoPlanWalkerContext context);
+bool hypo_plan_walker(Node *node, hypoPlanWalkerContext context);
+#endif
 #endif
 
 #endif
