@@ -19,7 +19,7 @@ This extension is compatible with **PostgreSQL 9.2 and above**.
 
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
    :caption: Contents:
 
    hypothetical_objects

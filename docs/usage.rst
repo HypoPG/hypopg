@@ -150,7 +150,7 @@ Some other convenience functions are available:
 .. code-block:: psql
 
   SELECT indexname, hypopg_get_indexdef(indexrelid) FROM hypopg_list_indexes() ;
-        indexname       |             hypopg_get_indexdef              
+        indexname       |             hypopg_get_indexdef
   ----------------------+----------------------------------------------
    <18284>btree_hypo_id | CREATE INDEX ON public.hypo USING btree (id)
   (1 row)
@@ -193,7 +193,7 @@ retrieve a row will do as expected:
 .. code-block:: psql
 
   EXPLAIN SELECT * FROM hypo_part_range WHERE id = 2;
-                              QUERY PLAN                            
+                              QUERY PLAN
   ------------------------------------------------------------------
    Seq Scan on hypo_part_range  (cost=0.00..537.99 rows=1 width=14)
      Filter: (id = 2)
@@ -234,7 +234,7 @@ partitioned table:
 .. code-block:: psql
 
   EXPLAIN SELECT * FROM hypo_part_range WHERE id = 2;
-                                             QUERY PLAN                                           
+                                             QUERY PLAN
   ------------------------------------------------------------------------------------------------
    Append  (cost=0.00..179.95 rows=1 width=14)
      ->  Seq Scan on hypo_part_range hypo_part_range_1_10000  (cost=0.00..179.95 rows=1 width=14)
@@ -249,7 +249,7 @@ partitions:
 .. code-block:: psql
 
   SELECT hypopg_create_index('CREATE INDEX on hypo_part_range_1_10000 (id)');
-                                                                    QUERY PLAN                                                                   
+                                                                    QUERY PLAN
   -----------------------------------------------------------------------------------------------------------------------------------------------
    Append  (cost=0.04..8.06 rows=1 width=14)
      ->  Index Scan using <258199>btree_hypo_part_range_1_10000_id on hypo_part_range hypo_part_range_1_10000  (cost=0.04..8.05 rows=1 width=14)
@@ -272,3 +272,11 @@ Some other convenience functions are available:
   a hypothetically partitioned table (including the stored statistics if any)
 - **hypopg_reset_table()**: remove all previously created hypothetical partition
   (inclufing the stored statistics if any)
+
+Limitations with hypothetical partitions
+----------------------------------------
+
+Unfortunately, some features can not be handled with hypothetical partitions:
+
+- UPDATE and DELETE on hypothetical partitions
+- partition-wise join on hypothetical partitions in PostgreSQL 11

@@ -50,7 +50,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = 'HypoPG'
-copyright = '2015-2018, Julien Rouhaud'
+copyright = '2015-2019, Julien Rouhaud'
 author = 'Julien Rouhaud'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -103,7 +103,9 @@ if not on_rtd: # only import and set the theme if we're building docs locally
 # further.  For a list of options available for each theme, see the
 # documentation.
 #
-# html_theme_options = {}
+html_theme_options = {
+    'navigation_depth': 4
+}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
