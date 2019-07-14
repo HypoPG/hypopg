@@ -100,6 +100,7 @@ build_index_tlist(PlannerInfo *root, IndexOptInfo *index,
 	return tlist;
 }
 
+#if PG_VERSION_NUM < 100000
 /*
  * Copied from src/backend/commands/indexcmds.c, not exported.
  * Resolve possibly-defaulted operator class specification
@@ -214,6 +215,7 @@ GetIndexOpClass(List *opclass, Oid attrType,
 
 	return opClassId;
 }
+#endif
 
 /*
  * Copied from src/backend/commands/indexcmds.c, not exported.

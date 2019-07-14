@@ -632,7 +632,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 			}
 
 			/* get the opclass */
-			opclass = GetIndexOpClass(attribute->opclass,
+			opclass = ResolveOpClass(attribute->opclass,
 									  atttype,
 									  node->accessMethod,
 									  entry->relam);
