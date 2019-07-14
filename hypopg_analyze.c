@@ -29,10 +29,22 @@
 #if PG_VERSION_NUM >= 90300
 #include "access/htup_details.h"
 #endif
+#if PG_VERSION_NUM >= 120000
+#include "access/relation.h"
+#include "access/table.h"
+#endif
 #include "commands/vacuum.h"
 #include "executor/spi.h"
+#if PG_VERSION_NUM >= 120000
+#include "nodes/makefuncs.h"
+#else
 #include "optimizer/clauses.h"
+#endif
+#if PG_VERSION_NUM >= 120000
+#include "optimizer/optimizer.h"
+#else
 #include "optimizer/cost.h"
+#endif
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/attoptcache.h"

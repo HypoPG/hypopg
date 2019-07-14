@@ -27,8 +27,13 @@
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/paths.h"
+#if PG_VERSION_NUM >= 120000
+#include "optimizer/optimizer.h"
+#endif
 #include "optimizer/planner.h"
+#if PG_VERSION_NUM < 120000
 #include "optimizer/var.h"
+#endif
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
@@ -207,6 +212,40 @@ partition_bound_cmp(PartitionKey key, PartitionBoundInfo boundinfo,
 /*
  * Imported from src/backend/catalog/partition.c, not exported in pg10
  *
+ * partition_rbound_datum_cmp
+ *
+ * Return whether range bound (specified in rb_datums, rb_kind, and rb_lower)
+ * is <, =, or > partition key of tuple (tuple_datums)
+ */
+static int32
+partition_rbound_datum_cmp(PartitionKey key,
+						   Datum *rb_datums, PartitionRangeDatumKind *rb_kind,
+						   Datum *tuple_datums)
+{
+	int			i;
+	int32		cmpval = -1;
+
+	for (i = 0; i < key->partnatts; i++)
+	{
+		if (rb_kind[i] == PARTITION_RANGE_DATUM_MINVALUE)
+			return -1;
+		else if (rb_kind[i] == PARTITION_RANGE_DATUM_MAXVALUE)
+			return 1;
+
+		cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[i],
+												 key->partcollation[i],
+												 rb_datums[i],
+												 tuple_datums[i]));
+		if (cmpval != 0)
+			break;
+	}
+
+	return cmpval;
+}
+
+/*
+ * Imported from src/backend/catalog/partition.c, not exported in pg10
+ *
  * partition_rbound_cmp
  *
  * Return for two range bounds whether the 1st one (specified in datum1,
@@ -270,41 +309,193 @@ partition_rbound_cmp(PartitionKey key,
 
 	return cmpval;
 }
+#endif		/* pg10 only imports */
+
+/* pg12+ only imports */
+#if PG_VERSION_NUM >= 120000
+
 
 /*
- * Imported from src/backend/catalog/partition.c, not exported in pg10
+ * make_one_partition_rbound
  *
- * partition_rbound_datum_cmp
- *
- * Return whether range bound (specified in rb_datums, rb_kind, and rb_lower)
- * is <, =, or > partition key of tuple (tuple_datums)
+ * Return a PartitionRangeBound given a list of PartitionRangeDatum elements
+ * and a flag telling whether the bound is lower or not.  Made into a function
+ * because there are multiple sites that want to use this facility.
  */
-static int32
-partition_rbound_datum_cmp(PartitionKey key,
-						   Datum *rb_datums, PartitionRangeDatumKind *rb_kind,
-						   Datum *tuple_datums)
+PartitionRangeBound *
+make_one_partition_rbound(PartitionKey key, int index, List *datums, bool lower)
 {
+	PartitionRangeBound *bound;
+	ListCell   *lc;
 	int			i;
-	int32		cmpval = -1;
 
-	for (i = 0; i < key->partnatts; i++)
+	Assert(datums != NIL);
+
+	bound = (PartitionRangeBound *) palloc0(sizeof(PartitionRangeBound));
+	bound->index = index;
+	bound->datums = (Datum *) palloc0(key->partnatts * sizeof(Datum));
+	bound->kind = (PartitionRangeDatumKind *) palloc0(key->partnatts *
+													  sizeof(PartitionRangeDatumKind));
+	bound->lower = lower;
+
+	i = 0;
+	foreach(lc, datums)
 	{
-		if (rb_kind[i] == PARTITION_RANGE_DATUM_MINVALUE)
-			return -1;
-		else if (rb_kind[i] == PARTITION_RANGE_DATUM_MAXVALUE)
-			return 1;
+		PartitionRangeDatum *datum = castNode(PartitionRangeDatum, lfirst(lc));
 
-		cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[i],
-												 key->partcollation[i],
-												 rb_datums[i],
-												 tuple_datums[i]));
+		/* What's contained in this range datum? */
+		bound->kind[i] = datum->kind;
+
+		if (datum->kind == PARTITION_RANGE_DATUM_VALUE)
+		{
+			Const	   *val = castNode(Const, datum->value);
+
+			if (val->constisnull)
+				elog(ERROR, "invalid range bound datum");
+			bound->datums[i] = val->constvalue;
+		}
+
+		i++;
+	}
+
+	return bound;
+}
+
+/*
+ * partition_range_bsearch
+ *		Returns the index of the greatest range bound that is less than or
+ *		equal to the given range bound or -1 if all of the range bounds are
+ *		greater
+ *
+ * *is_equal is set to true if the range bound at the returned index is equal
+ * to the input range bound
+ */
+int
+partition_range_bsearch(int partnatts, FmgrInfo *partsupfunc,
+						Oid *partcollation,
+						PartitionBoundInfo boundinfo,
+						PartitionRangeBound *probe, bool *is_equal)
+{
+	int			lo,
+				hi,
+				mid;
+
+	lo = -1;
+	hi = boundinfo->ndatums - 1;
+	while (lo < hi)
+	{
+		int32		cmpval;
+
+		mid = (lo + hi + 1) / 2;
+		cmpval = partition_rbound_cmp(partnatts, partsupfunc,
+									  partcollation,
+									  boundinfo->datums[mid],
+									  boundinfo->kind[mid],
+									  (boundinfo->indexes[mid] == -1),
+									  probe);
+		if (cmpval <= 0)
+		{
+			lo = mid;
+			*is_equal = (cmpval == 0);
+
+			if (*is_equal)
+				break;
+		}
+		else
+			hi = mid - 1;
+	}
+
+	return lo;
+}
+
+/*
+ * partition_hbound_cmp
+ *
+ * Compares modulus first, then remainder if modulus is equal.
+ */
+int32
+partition_hbound_cmp(int modulus1, int remainder1, int modulus2, int remainder2)
+{
+	if (modulus1 < modulus2)
+		return -1;
+	if (modulus1 > modulus2)
+		return 1;
+	if (modulus1 == modulus2 && remainder1 != remainder2)
+		return (remainder1 > remainder2) ? 1 : -1;
+	return 0;
+}
+
+/*
+ * partition_rbound_cmp
+ *
+ * Return for two range bounds whether the 1st one (specified in datums1,
+ * kind1, and lower1) is <, =, or > the bound specified in *b2.
+ *
+ * partnatts, partsupfunc and partcollation give the number of attributes in the
+ * bounds to be compared, comparison function to be used and the collations of
+ * attributes, respectively.
+ *
+ * Note that if the values of the two range bounds compare equal, then we take
+ * into account whether they are upper or lower bounds, and an upper bound is
+ * considered to be smaller than a lower bound. This is important to the way
+ * that RelationBuildPartitionDesc() builds the PartitionBoundInfoData
+ * structure, which only stores the upper bound of a common boundary between
+ * two contiguous partitions.
+ */
+int32
+partition_rbound_cmp(int partnatts, FmgrInfo *partsupfunc,
+					 Oid *partcollation,
+					 Datum *datums1, PartitionRangeDatumKind *kind1,
+					 bool lower1, PartitionRangeBound *b2)
+{
+	int32		cmpval = 0;		/* placate compiler */
+	int			i;
+	Datum	   *datums2 = b2->datums;
+	PartitionRangeDatumKind *kind2 = b2->kind;
+	bool		lower2 = b2->lower;
+
+	for (i = 0; i < partnatts; i++)
+	{
+		/*
+		 * First, handle cases where the column is unbounded, which should not
+		 * invoke the comparison procedure, and should not consider any later
+		 * columns. Note that the PartitionRangeDatumKind enum elements
+		 * compare the same way as the values they represent.
+		 */
+		if (kind1[i] < kind2[i])
+			return -1;
+		else if (kind1[i] > kind2[i])
+			return 1;
+		else if (kind1[i] != PARTITION_RANGE_DATUM_VALUE)
+
+			/*
+			 * The column bounds are both MINVALUE or both MAXVALUE. No later
+			 * columns should be considered, but we still need to compare
+			 * whether they are upper or lower bounds.
+			 */
+			break;
+
+		cmpval = DatumGetInt32(FunctionCall2Coll(&partsupfunc[i],
+												 partcollation[i],
+												 datums1[i],
+												 datums2[i]));
 		if (cmpval != 0)
 			break;
 	}
 
+	/*
+	 * If the comparison is anything other than equal, we're done. If they
+	 * compare equal though, we still have to consider whether the boundaries
+	 * are inclusive or exclusive.  Exclusive one is considered smaller of the
+	 * two.
+	 */
+	if (cmpval == 0 && lower1 != lower2)
+		cmpval = lower1 ? 1 : -1;
+
 	return cmpval;
 }
-#endif		/* pg10 only imports */
+#endif
+/* end of pg12+ only imports */
 
 /*
  * Copied from src/backend/commands/tablecmds.c, not exported.

@@ -25,6 +25,9 @@
 #include "access/hash.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#if PG_VERSION_NUM >= 120000
+#include "access/table.h"
+#endif
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
@@ -36,16 +39,27 @@
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
+#if PG_VERSION_NUM < 120000
 #include "nodes/relation.h"
+#else
+#include "access/relation.h"
+#endif
 #include "nodes/nodes.h"
 #include "nodes/pg_list.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
+#if PG_VERSION_NUM >= 120000
+#include "optimizer/optimizer.h"
+#endif
 #include "optimizer/pathnode.h"
+#if PG_VERSION_NUM < 120000
 #include "optimizer/predtest.h"
+#endif
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#if PG_VERSION_NUM < 120000
 #include "optimizer/var.h"
+#endif
 #include "parser/parsetree.h"
 #include "parser/parse_utilcmd.h"
 #include "rewrite/rewriteManip.h"
@@ -57,6 +71,9 @@
 #if PG_VERSION_NUM >= 110000
 #include "utils/partcache.h"
 #include "partitioning/partbounds.h"
+#endif
+#if PG_VERSION_NUM >= 120000
+#include "partitioning/partdesc.h"
 #endif
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
@@ -1703,7 +1720,7 @@ hypo_table_check_constraints_compatibility(hypoTable *table)
 
 		index = idxRel->rd_index;
 
-		if (!IndexIsValid(index))
+		if (!index->indisvalid)
 		{
 			index_close(idxRel, AccessShareLock);
 			continue;
@@ -3928,7 +3945,11 @@ hypopg_add_partition(PG_FUNCTION_ARGS)
 		elog(ERROR, "hypopg: hypothetical table %s already exists",
 			 quote_identifier(partname));
 
-	tupdesc = CreateTemplateTupleDesc(HYPO_ADD_PART_COLS, false);
+	tupdesc = CreateTemplateTupleDesc(HYPO_ADD_PART_COLS
+#if PG_VERSION_NUM < 120000
+			,false
+#endif
+			);
 	TupleDescInitEntry(tupdesc, (AttrNumber) ++i, "relid", OIDOID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) ++i, "tablename", TEXTOID, -1, 0);
 	Assert(i == HYPO_ADD_PART_COLS);

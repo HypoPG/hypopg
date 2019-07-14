@@ -19,24 +19,8 @@
 #error "This could should only be included on pg10+ code"
 #endif
 
-
-/* pg10 only imports */
-#if PG_VERSION_NUM < 110000
-/*
- * Imported from src/backend/catalog/partition.c, not exported
- */
-typedef struct PartitionBoundInfoData
-{
-	char		strategy;		/* hash, list or range? */
-	int			ndatums;		/* Length of the datums following array */
-	Datum	  **datums;
-	PartitionRangeDatumKind **kind; /* The kind of each range bound datum;
-									 * NULL for hash and list partitioned
-									 * tables */
-	int		   *indexes;		/* Partition indexes */
-	int			null_index;		/* Index of the null-accepting partition; -1
-								 * if there isn't one */
-} PartitionBoundInfoData;
+/* pg10 and pg12+ imports */
+#if PG_VERSION_NUM < 110000 || PG_VERSION_NUM >= 120000
 
 /* One bound of a hash partition */
 typedef struct PartitionHashBound
@@ -79,10 +63,47 @@ int32 partition_bound_cmp(PartitionKey key,
 					PartitionBoundInfo boundinfo,
 					int offset, void *probe, bool probe_is_bound);
 
+#endif		/* pg10 and pg12+ imports */
+
+/* pg10 only imports */
+#if PG_VERSION_NUM < 110000
+/*
+ * Imported from src/backend/catalog/partition.c, not exported
+ */
+typedef struct PartitionBoundInfoData
+{
+	char		strategy;		/* hash, list or range? */
+	int			ndatums;		/* Length of the datums following array */
+	Datum	  **datums;
+	PartitionRangeDatumKind **kind; /* The kind of each range bound datum;
+									 * NULL for hash and list partitioned
+									 * tables */
+	int		   *indexes;		/* Partition indexes */
+	int			null_index;		/* Index of the null-accepting partition; -1
+								 * if there isn't one */
+} PartitionBoundInfoData;
 int32 partition_rbound_cmp(PartitionKey key,
 					 Datum *datums1, PartitionRangeDatumKind *kind1,
 					 bool lower1, PartitionRangeBound *b2);
-#endif		/* pg10 only imports */
+#endif
+
+/* pg12+ only imports */
+#if PG_VERSION_NUM >= 120000
+extern PartitionRangeBound *
+make_one_partition_rbound(PartitionKey key, int index, List *datums, bool lower);
+extern int partition_range_bsearch(int partnatts, FmgrInfo *partsupfunc,
+						Oid *partcollation,
+						PartitionBoundInfo boundinfo,
+						PartitionRangeBound *probe, bool *is_equal);
+extern int32
+partition_hbound_cmp(int modulus1, int remainder1, int modulus2, int remainder2);
+extern int32
+partition_rbound_cmp(int partnatts, FmgrInfo *partsupfunc,
+					 Oid *partcollation,
+					 Datum *datums1, PartitionRangeDatumKind *kind1,
+					 bool lower1, PartitionRangeBound *b2);
+#endif
+/* end of pg12+ only imports */
 
 /* Context info needed for invoking a recursive querytree display routine */
 typedef struct
