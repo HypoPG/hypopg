@@ -37,6 +37,9 @@ DATA = $(wildcard *--*.sql)
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
+ifneq ($(MAJORVERSION),$(filter $(MAJORVERSION), 9.2 9.3 9.4))
+	REGRESS += hypo_brin
+endif
 ifeq ($(MAJORVERSION),$(filter $(MAJORVERSION),9.2 9.3 9.4 9.5 9.6))
 	REGRESS += hypo_no_table
 else
