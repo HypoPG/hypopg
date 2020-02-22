@@ -1,5 +1,9 @@
 -- Hypothetical index tests
 
+-- Hypothetical index on unexisting table
+SELECT COUNT(*) AS nb
+FROM public.hypopg_create_index('CREATE INDEX ON notatable(meh);');
+
 CREATE TABLE hypo (id integer, val text);
 
 INSERT INTO hypo SELECT i, 'line ' || i

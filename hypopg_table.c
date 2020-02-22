@@ -1920,14 +1920,17 @@ hypo_find_table(Oid tableid, bool missing_ok)
 }
 
 /*
- * Return the hypothetical oid if  the given name is an hypothetical partition,
- * otherwise return InvalidOid
+ * Return the hypothetical table if the given unqualified object name is an
+ * hypothetical partition, otherwise return NULL.
  */
 hypoTable *
 hypo_table_name_get_entry(const char *name)
 {
 	HASH_SEQ_STATUS hash_seq;
 	hypoTable  *entry;
+
+	if (!hypoTables)
+		return NULL;
 
 	hash_seq_init(&hash_seq, hypoTables);
 	while ((entry = hash_seq_search(&hash_seq)) != NULL)

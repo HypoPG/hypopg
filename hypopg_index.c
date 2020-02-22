@@ -352,7 +352,12 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 		hypoTable  *table = hypo_table_name_get_entry(rv->relname);
 
 		if (!table)
-			elog(ERROR, "hypopg: table %s does not exists",
+			/*
+			 * We use the same error message as postgres so users (and
+			 * regression tests) get a consistent message error before and
+			 * after pg10.
+			 */
+			elog(ERROR, "relation \"%s\" does not exist",
 				 quote_identifier(rv->relname));
 
 		if (table->partkey)
