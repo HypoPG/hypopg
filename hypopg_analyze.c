@@ -29,10 +29,18 @@
 #if PG_VERSION_NUM >= 90300
 #include "access/htup_details.h"
 #endif
+#if PG_VERSION_NUM >= 120000
+#include "access/table.h"
+#endif
 #include "commands/vacuum.h"
 #include "executor/spi.h"
+#if PG_VERSION_NUM < 120000
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
+#else
+#include"nodes/makefuncs.h"
+#include"optimizer/optimizer.h"
+#endif
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/attoptcache.h"
@@ -617,15 +625,15 @@ HYPO_PARTITION_NOT_SUPPORTED();
 				HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
 	}
 
-	onerel = heap_open(root_tableid, AccessShareLock);
-	pgstats = heap_open(StatisticRelationId, AccessShareLock);
+	onerel = table_open(root_tableid, AccessShareLock);
+	pgstats = table_open(StatisticRelationId, AccessShareLock);
 
 	hypo_do_analyze_tree(onerel, pgstats, fraction, root_entry);
 
 	/* release SPI related resources (and return to caller's context) */
 	SPI_finish();
-	relation_close(onerel, AccessShareLock);
-	relation_close(pgstats, AccessShareLock);
+	table_close(onerel, AccessShareLock);
+	table_close(pgstats, AccessShareLock);
 
 
 	return (Datum) 0;
@@ -682,7 +690,7 @@ HYPO_PARTITION_NOT_SUPPORTED();
 	if (!hypoStatsHash)
 		return (Datum) 0;
 
-	pgstats = heap_open(StatisticRelationId, AccessShareLock);
+	pgstats = table_open(StatisticRelationId, AccessShareLock);
 
 	hash_seq_init(&hash_seq, hypoStatsHash);
 	while ((entry = hash_seq_search(&hash_seq)) != NULL)
@@ -699,7 +707,7 @@ HYPO_PARTITION_NOT_SUPPORTED();
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
 
-	relation_close(pgstats, AccessShareLock);
+	table_close(pgstats, AccessShareLock);
 
 	/* clean up and return the tuplestore */
 	tuplestore_donestoring(tupstore);

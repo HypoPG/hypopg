@@ -36,16 +36,22 @@
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
+#if PG_VERSION_NUM < 120000
 #include "nodes/relation.h"
+#endif
 #include "nodes/nodes.h"
 #include "nodes/pg_list.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
+#if PG_VERSION_NUM < 120000
 #include "optimizer/predtest.h"
+#endif
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#if PG_VERSION_NUM < 120000
 #include "optimizer/var.h"
+#endif
 #include "parser/parsetree.h"
 #include "parser/parse_utilcmd.h"
 #include "rewrite/rewriteManip.h"
@@ -57,6 +63,9 @@
 #if PG_VERSION_NUM >= 110000
 #include "utils/partcache.h"
 #include "partitioning/partbounds.h"
+#endif
+#if PG_VERSION_NUM >= 120000
+#include "partitioning/partdesc.h"
 #endif
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"

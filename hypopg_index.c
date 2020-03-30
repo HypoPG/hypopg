@@ -32,6 +32,10 @@
 #include "access/htup_details.h"
 #endif
 #include "access/nbtree.h"
+#if PG_VERSION_NUM >= 120000
+#include "access/relation.h"
+#include "access/table.h"
+#endif
 #include "access/reloptions.h"
 #include "access/spgist.h"
 #include "access/spgist_private.h"
@@ -44,11 +48,19 @@
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
+#if PG_VERSION_NUM < 120000
 #include "nodes/relation.h"
+#else
+#include "nodes/makefuncs.h"
+#endif
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
+#if PG_VERSION_NUM < 120000
 #include "optimizer/var.h"
+#else
+#include "optimizer/optimizer.h"
+#endif
 #include "parser/parse_utilcmd.h"
 #include "parser/parser.h"
 #include "parser/parsetree.h"
@@ -128,6 +140,7 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 	hypoIndex  *volatile entry;
 	MemoryContext oldcontext;
 	HeapTuple	tuple;
+	Oid			oid;
 
 #if PG_VERSION_NUM >= 90600
 	IndexAmRoutine *amroutine;
@@ -146,13 +159,19 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 						accessMethod)));
 	}
 
-	hypo_discover_am(accessMethod, HeapTupleGetOid(tuple));
+#if PG_VERSION_NUM < 120000
+	oid = HeapTupleGetOid(tuple);
+#else
+	oid = ((Form_pg_am) GETSTRUCT(tuple))->oid;
+#endif
+
+	hypo_discover_am(accessMethod, oid);
 
 	oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
 
 	entry = palloc0(sizeof(hypoIndex));
 
-	entry->relam = HeapTupleGetOid(tuple);
+	entry->relam = oid;
 
 #if PG_VERSION_NUM >= 90600
 
@@ -664,10 +683,17 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 			}
 
 			/* get the opclass */
+#if PG_VERSION_NUM < 100000
+			opclass= GetIndexOpClass(attribute->opclass,
+									  atttype,
+									  node->accessMethod,
+									  entry->relam);
+#else
 			opclass = ResolveOpClass(attribute->opclass,
 									  atttype,
 									  node->accessMethod,
 									  entry->relam);
+#endif
 			entry->opclass[attn] = opclass;
 			/* setup the opfamily */
 			entry->opfamily[attn] = get_opclass_family(opclass);
@@ -726,7 +752,11 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 		{
 			AttrNumber	attno = entry->indexkeys[attn];
 
-			if (attno < 0 && attno != ObjectIdAttributeNumber)
+			if (attno < 0
+#if PG_VERSION_NUM < 120000
+					&& attno != ObjectIdAttributeNumber
+#endif
+			   )
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("hypopg: index creation on system columns is not supported")));
@@ -824,7 +854,10 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 
 			for (i = FirstLowInvalidHeapAttributeNumber + 1; i < 0; i++)
 			{
-				if (i != ObjectIdAttributeNumber &&
+				if (
+#if PG_VERSION_NUM < 120000
+						i != ObjectIdAttributeNumber &&
+#endif
 					bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
 								  indexattrs))
 					ereport(ERROR,
@@ -1759,7 +1792,7 @@ hypo_estimate_index_simple(hypoIndex *entry, BlockNumber *pages, double *tuples)
 	rel = makeNode(RelOptInfo);
 
 	/* Open the hypo index' relation */
-	relation = heap_open(entry->relid, AccessShareLock);
+	relation = table_open(entry->relid, AccessShareLock);
 
 	if (!RelationNeedsWAL(relation) && RecoveryInProgress())
 		ereport(ERROR,
@@ -1787,7 +1820,7 @@ hypo_estimate_index_simple(hypoIndex *entry, BlockNumber *pages, double *tuples)
 					  &rel->pages, &rel->tuples, &rel->allvisfrac);
 
 	/* Close the relation and release the lock now */
-	heap_close(relation, AccessShareLock);
+	table_close(relation, AccessShareLock);
 
 	hypo_estimate_index(entry, rel, NULL);
 	*pages = entry->pages;
