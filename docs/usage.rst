@@ -72,7 +72,7 @@ would help a simple query.  First, let's see how it behaves:
 
 .. code-block:: psql
 
-  EXPLAIN SELECT val FROM hypo WHERE id = 1;
+  EXPLAIN SELECT * FROM hypo WHERE id = 1;
                          QUERY PLAN
   --------------------------------------------------------
    Seq Scan on hypo  (cost=0.00..1791.00 rows=1 width=14)
@@ -103,7 +103,7 @@ We can run the EXPLAIN again to see if PostgreSQL would use this index:
 .. code-block:: psql
   :emphasize-lines: 4
 
-  EXPLAIN SELECT val FROM hypo WHERE id = 1;
+  EXPLAIN SELECT * FROM hypo WHERE id = 1;
                                       QUERY PLAN
   ----------------------------------------------------------------------------------
    Index Scan using <18284>btree_hypo_id on hypo  (cost=0.04..8.06 rows=1 width=10)
@@ -115,7 +115,7 @@ hypothetical index won't be used to acually run the query:
 
 .. code-block:: psql
 
-  EXPLAIN ANALYZE SELECT val FROM hypo WHERE id = 1;
+  EXPLAIN ANALYZE SELECT * FROM hypo WHERE id = 1;
                                               QUERY PLAN
   ---------------------------------------------------------------------------------------------------
    Seq Scan on hypo  (cost=0.00..1791.00 rows=1 width=10) (actual time=0.046..46.390 rows=1 loops=1)
