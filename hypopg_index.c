@@ -1760,23 +1760,28 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 	if (entry->relam == BTREE_AM_OID)
 	{
 		/* -------------------------------
-		 * quick estimating of index size:
+		 * quick estimating of index size. Each B-tree index tuple contains:
 		 *
-		 * sizeof(PageHeader) : 24 (1 per page)
-		 * sizeof(BTPageOpaqueData): 16 (1 per page)
-		 * sizeof(IndexTupleData): 8 (1 per tuple, referencing heap)
-		 * sizeof(ItemIdData): 4 (1 per tuple, storing the index item)
-		 * default fillfactor: 90%
-		 * no NULL handling
+		 * - sizeof(ItemIdData): 4 (after page header, references index tuple)
+		 * - sizeof(IndexTupleData): 8 (index tuple header, includes heap TID)
+		 * - actual data size based on each key's average attribute width
+		 *
+		 * For this estimation it is assumed all values are not NULL.
+		 *
+		 * Additionally, the following data is present once in each page:
+		 *
+		 * - sizeof(PageHeader) : 24
+		 * - sizeof(BTPageOpaqueData): 16
+		 *
+		 * for calculating fill of index pages this uses:
+		 *
+		 * fillfactor parameter, or default fillfactor (90%)
 		 * fixed additional bloat: 20%
 		 *
-		 * I'll also need to read more carefully nbtree code to check if
-		 * this is accurate enough.
-		 *
+		 * Note that this does not yet consider B-tree deduplication added in
+		 * Postgres 13.
 		 */
-		line_size = ind_avg_width +
-			+(sizeof(IndexTupleData) * entry->ncolumns)
-			+ MAXALIGN(sizeof(ItemIdData) * entry->ncolumns);
+		line_size = ind_avg_width + MAXALIGN(sizeof(IndexTupleData)) + sizeof(ItemIdData);
 
 		usable_page_size = BLCKSZ - SizeOfPageHeaderData - sizeof(BTPageOpaqueData);
 		bloat_factor = (200.0
