@@ -176,12 +176,12 @@ Manipulate hypothetical indexes
 
 Some other convenience functions and views are available:
 
-- **hypopg_list_indexes**: view that lists all hypothetical indexes that have
+- **hypopg_list_indexes()**: view that lists all hypothetical indexes that have
   been created
 
 .. code-block:: psql
 
-  SELECT * FROM hypopg_list_indexes ;
+  SELECT * FROM hypopg_list_indexes() ;
    indexrelid |      indexname       | nspname | relname | amname
   ------------+----------------------+---------+---------+--------
         18284 | <18284>btree_hypo_id | public  | hypo    | btree
