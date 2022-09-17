@@ -206,9 +206,9 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 	if ((entry->relam == BTREE_AM_OID) || (entry->amcanorder))
 	{
 		if (entry->relam != BTREE_AM_OID)
-			entry->sortopfamily = palloc0(sizeof(Oid) * nkeycolumns);
-		entry->reverse_sort = palloc0(sizeof(bool) * nkeycolumns);
-		entry->nulls_first = palloc0(sizeof(bool) * nkeycolumns);
+			entry->sortopfamily = palloc0(sizeof(Oid) * (nkeycolumns + ninccolumns));
+		entry->reverse_sort = palloc0(sizeof(bool) * (nkeycolumns + ninccolumns));
+		entry->nulls_first = palloc0(sizeof(bool) * (nkeycolumns + ninccolumns));
 	}
 	else
 	{
