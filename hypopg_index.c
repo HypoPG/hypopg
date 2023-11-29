@@ -69,10 +69,6 @@
 #endif
 #include "utils/syscache.h"
 
-#ifndef tuplestore_donestoring
-#define tuplestore_donestoring(state)	((void) 0)
-#endif
-
 #include "include/hypopg.h"
 #include "include/hypopg_index.h"
 
@@ -1293,9 +1289,6 @@ hypopg(PG_FUNCTION_ARGS)
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
 
-	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
-
 	return (Datum) 0;
 }
 
@@ -1374,9 +1367,6 @@ hypopg_create_index(PG_FUNCTION_ARGS)
 		}
 		i++;
 	}
-
-	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	return (Datum) 0;
 }
@@ -1722,9 +1712,6 @@ hypopg_hidden_indexes(PG_FUNCTION_ARGS)
 		values[0] = ObjectIdGetDatum(indexid);
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
-
-	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	return (Datum) 0;
 }
