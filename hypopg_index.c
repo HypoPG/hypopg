@@ -69,6 +69,10 @@
 #endif
 #include "utils/syscache.h"
 
+#ifndef tuplestore_donestoring
+#define tuplestore_donestoring(state)	((void) 0)
+#endif
+
 #include "include/hypopg.h"
 #include "include/hypopg_index.h"
 
