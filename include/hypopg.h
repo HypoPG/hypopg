@@ -49,6 +49,7 @@ extern bool isExplain;
 
 /* GUC for enabling / disabling hypopg during EXPLAIN */
 extern bool hypo_is_enabled;
+extern bool hypo_use_real_oids;
 extern MemoryContext HypoMemoryContext;
 
 Oid			hypo_getNewOid(Oid relid);
