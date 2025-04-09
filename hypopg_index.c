@@ -878,7 +878,11 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 			Oid			ltopr;
 			Oid			btopfamily;
 			Oid			btopcintype;
+#if PG_VERSION_NUM >= 180000
+			CompareType	btstrategy;
+#else
 			int16		btstrategy;
+#endif
 
 			ltopr = get_opfamily_member(entry->opfamily[attn],
 										entry->opcintype[attn],
@@ -890,7 +894,12 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 										   &btopcintype,
 										   &btstrategy) &&
 				btopcintype == entry->opcintype[attn] &&
-				btstrategy == BTLessStrategyNumber)
+#if PG_VERSION_NUM >= 180000
+				btstrategy == COMPARE_LT
+#else
+				btstrategy == BTLessStrategyNumber
+#endif
+			)
 			{
 				/* Successful mapping */
 				entry->sortopfamily[attn] = btopfamily;
