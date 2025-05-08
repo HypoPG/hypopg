@@ -895,8 +895,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 										   &btopcintype,
 										   &btstrategy) &&
 				btopcintype == entry->opcintype[attn] &&
-				btstrategy == COMPARE_LT
-			)
+				btstrategy == COMPARE_LT)
 			{
 				/* Successful mapping */
 				entry->sortopfamily[attn] = btopfamily;
