@@ -90,6 +90,77 @@ The following access methods are supported:
 - brin
 - hash (requires PostgreSQL 10 or above)
 - bloom (requires the bloom extension to be installed)
+- gist
+
+GiST indexes
+------------
+
+HypoPG supports hypothetical GiST indexes.  Use the same **CREATE INDEX**
+statement you would use for a real index, including an operator class, its
+options, or ``INCLUDE`` columns:
+
+.. code-block:: psql
+
+  SELECT * FROM hypopg_create_index(
+    'CREATE INDEX ON reservations USING gist (during)'
+  );
+
+GiST is an extensible index method, so its physical size depends on the
+operator class, its options, and the data distribution.  HypoPG estimates that
+size from the table statistics and calibrated models for common operator
+classes; it does not execute GiST support functions or build the index.  The
+estimate is therefore useful for comparing candidates, while PostgreSQL still
+uses its normal operator-class semantics when choosing a plan.
+
+The current calibrated families include scalar, range, and multirange keys,
+common ``btree_gist`` classes, hstore, intarray, ltree, pg_trgm, tsvector, and
+common PostGIS 2D, geography, and 3D ND cases.  Unrecognized or not separately
+calibrated operator classes use a generic statistics-based fallback.
+
+The practical coverage comparison is:
+
+.. list-table:: B-tree and GiST coverage
+   :header-rows: 1
+   :widths: 30 18 18 34
+
+   * - Measure
+     - B-tree
+     - GiST
+     - Interpretation
+   * - Valid candidate admission
+     - ~100%
+     - ~100%
+     - PostgreSQL-resolved operator classes enter the corresponding HypoPG path.
+   * - Estimator model coverage
+     - 100% shared model
+     - 40/45 = 88.9%
+     - B-tree uses one regular tuple/page model; GiST has identity-specific or bounded models for 40 named common families.
+   * - Generic fallback in the named common set
+     - 0%
+     - 5/45 = 11.1%
+     - GiST ``box``, ``circle``, ``point``, ``polygon``, and ``tsquery`` remain analyzed-width approximations; arbitrary third-party classes are outside this denominator.
+   * - PostgreSQL 18/19 control matrix
+     - Generic path
+     - 89/89 LOW on PostgreSQL 18; 88/88 LOW on PostgreSQL 19 Beta 3
+     - Every control scenario is below 5% size error with planner parity.
+   * - Combined measured GiST scenarios
+     - No equivalent exhaustive matrix
+     - 106/109 LOW = 97.2%
+     - The three HIGH cases are intentionally deferred antimeridian geography variants; planner parity is 109/109.
+
+There is no single finite PostgreSQL operator-permutation universe: extensions
+can add operator classes, and each class can publish different strategies or
+KNN operators.  These figures therefore describe candidate usability and
+estimator quality for the named common families and the committed benchmark
+matrix, rather than promising exact physical-size modeling for every possible
+GiST support-function implementation.
+
+For a fallback estimate, or for spatial data whose distribution is unusual,
+validate the candidate with a representative physical index before relying on
+the estimated byte or page count.  In particular, antimeridian geography and
+some 4D or higher-dimensional geometry workloads remain data-dependent.  The
+complete calibrated and deferred matrix is maintained with the GiST benchmark
+under ``benchmark/gist/README.md``.
 
 Create a hypothetical index
 ---------------------------

@@ -38,12 +38,16 @@
 #include "access/sysattr.h"
 #include "access/xlog.h"
 #include "catalog/namespace.h"
+#include "catalog/dependency.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_amproc.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_namespace_d.h"
+#include "catalog/pg_type_d.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
+#include "commands/extension.h"
 #if PG_VERSION_NUM >= 120000
 #include "nodes/makefuncs.h"
 #endif
@@ -85,6 +89,35 @@ static Oid	BLOOM_AM_OID = InvalidOid;
 #define COMPARE_LT BTLessStrategyNumber
 #endif
 
+#define HYPO_GIST_DEFAULT_FILLFACTOR 90
+#define HYPO_GIST_MULTIRANGE_MAX_WIDTH 52
+#define HYPO_GIST_SIGNATURE_KEY_HEADER 8
+#define HYPO_GIST_HSTORE_DEFAULT_SIGLEN 16
+#define HYPO_GIST_INT_DEFAULT_NUMRANGES 100
+#define HYPO_GIST_INTBIG_DEFAULT_SIGLEN (63 * 4)
+#define HYPO_GIST_LTREE_ARRAY_DEFAULT_SIGLEN 28
+#define HYPO_GIST_LTREE_ARRAY_DEFAULT_BLOAT 20
+#define HYPO_GIST_LTREE_ARRAY_SIGLEN_32_BLOAT 15
+#define HYPO_GIST_LTREE_ARRAY_SIGLEN_64_BLOAT 12
+#define HYPO_GIST_TRGM_LEAF_KEYSIZE 51
+#define HYPO_GIST_LTREE_ADDITIONAL_BLOAT 82
+#define HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN (31 * 4)
+#define HYPO_GIST_TSVECTOR_EXTERNAL_WIDTH 32
+#define HYPO_GIST_TSVECTOR_INLINE_BLOAT 0
+#define HYPO_GIST_TSVECTOR_DENSE_DEFAULT_BLOAT 52
+#define HYPO_GIST_TSVECTOR_DENSE_SIGLEN_256_BLOAT 39
+#define HYPO_GIST_TSVECTOR_DENSE_SIGLEN_512_BLOAT 50
+#define HYPO_GIST_TRGM_DEFAULT_SIGLEN 12
+#define HYPO_GIST_TRGM_DEFAULT_BLOAT 44
+#define HYPO_GIST_TRGM_SIGLEN_32_BLOAT 51
+#define HYPO_GIST_TRGM_SIGLEN_64_BLOAT 43
+#define HYPO_GIST_GEOMETRY_ND_KEYSIZE 32
+#define HYPO_GIST_CUBE_3D_POINT_KEYSIZE 32
+#define HYPO_GIST_CUBE_3D_BOX_KEYSIZE 56
+#define HYPO_GIST_CUBE_3D_POINT_BLOAT 150
+#define HYPO_GIST_CUBE_3D_BOX_BLOAT 130
+#define HYPO_GIST_EARTH_ADDITIONAL_BLOAT 230
+
 /*--- Variables exported ---*/
 
 explain_get_index_name_hook_type prev_explain_get_index_name_hook;
@@ -111,6 +144,20 @@ static void hypo_discover_am(char *amname, Oid oid);
 static void hypo_estimate_index_simple(hypoIndex * entry,
 									   BlockNumber *pages, double *tuples);
 static void hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel);
+static int hypo_gist_additional_bloat(hypoIndex * entry);
+static int hypo_gist_compressed_keysize(hypoIndex * entry, int col);
+static bool hypo_gist_is_opclass(hypoIndex * entry, const char *name);
+static bool hypo_gist_is_opclass_col(hypoIndex * entry, int col,
+									 const char *name);
+static bool hypo_gist_opclass_matches(Form_pg_opclass opcrec, Oid opclass,
+										 const char *name);
+static const char *hypo_gist_opclass_extension(const char *name);
+static bool hypo_gist_is_hstore_opclass(hypoIndex * entry);
+static bool hypo_gist_is_earth_type(Oid type);
+static bool hypo_gist_is_earth_col(hypoIndex * entry, int col);
+static int hypo_gist_numranges(hypoIndex * entry, int col, int default_numranges);
+static int hypo_gist_siglen(hypoIndex * entry, int col, int default_siglen);
+static bool hypo_gist_has_variable_key(hypoIndex * entry);
 static int	hypo_estimate_index_colsize(hypoIndex * entry, int col);
 static void hypo_index_pfree(hypoIndex * entry);
 static bool hypo_index_remove(Oid indexid);
@@ -215,6 +262,9 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 	entry->opfamily = palloc0(sizeof(Oid) * nkeycolumns);
 	entry->opclass = palloc0(sizeof(Oid) * nkeycolumns);
 	entry->opcintype = palloc0(sizeof(Oid) * nkeycolumns);
+#if PG_VERSION_NUM >= 90600
+	entry->opclassoptions = palloc0(sizeof(List *) * nkeycolumns);
+#endif
 	/* only palloc sort related fields if needed */
 	if ((entry->relam == BTREE_AM_OID) || (entry->amcanorder))
 	{
@@ -262,6 +312,9 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 		 * (and was previously done) here.
 		 */
 		if (entry->relam != BTREE_AM_OID
+#if PG_VERSION_NUM >= 90200
+			&& entry->relam != GIST_AM_OID
+#endif
 #if PG_VERSION_NUM >= 90500
 			&& entry->relam != BRIN_AM_OID
 #endif
@@ -509,6 +562,9 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 			IndexElem  *attribute = (IndexElem *) lfirst(lc);
 			Oid			atttype = InvalidOid;
 			Oid			opclass;
+#if PG_VERSION_NUM >= 90600
+			MemoryContext opclass_oldcontext;
+#endif
 
 			appendStringInfo(&indexRelationName, "_");
 
@@ -609,7 +665,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 
 					oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
 					entry->indexprs = lappend(entry->indexprs,
-											  (Node *) copyObject(attribute->expr));
+										  (Node *) copyObject(attribute->expr));
 					MemoryContextSwitchTo(oldcontext);
 				}
 			}
@@ -660,6 +716,15 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 									  entry->relam);
 #endif
 			entry->opclass[attn] = opclass;
+#if PG_VERSION_NUM >= 90600
+			if (attribute->opclassopts)
+			{
+				opclass_oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+				entry->opclassoptions[attn] =
+					(List *) copyObject(attribute->opclassopts);
+				MemoryContextSwitchTo(opclass_oldcontext);
+			}
+#endif
 			/* set up the opfamily */
 			entry->opfamily[attn] = get_opclass_family(opclass);
 
@@ -956,6 +1021,8 @@ hypo_index_remove(Oid indexid)
 static void
 hypo_index_pfree(hypoIndex * entry)
 {
+	int			i;
+
 	/* pfree all memory that has been allocated */
 	pfree(entry->indexname);
 	pfree(entry->indexkeys);
@@ -963,6 +1030,12 @@ hypo_index_pfree(hypoIndex * entry)
 	pfree(entry->opfamily);
 	pfree(entry->opclass);
 	pfree(entry->opcintype);
+#if PG_VERSION_NUM >= 90600
+		for (i = 0; i < entry->nkeycolumns; i++)
+			if (entry->opclassoptions[i])
+				list_free_deep(entry->opclassoptions[i]);
+		pfree(entry->opclassoptions);
+#endif
 	if ((entry->relam == BTREE_AM_OID) || entry->amcanorder)
 	{
 		if ((entry->relam != BTREE_AM_OID) && entry->sortopfamily)
@@ -1034,6 +1107,9 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 	index->indexcollations = (Oid *) palloc(sizeof(int) * nkeycolumns);
 	index->opfamily = (Oid *) palloc(sizeof(int) * nkeycolumns);
 	index->opcintype = (Oid *) palloc(sizeof(int) * nkeycolumns);
+#if PG_VERSION_NUM >= 90600
+	index->opclassoptions = (bytea **) palloc0(sizeof(bytea *) * nkeycolumns);
+#endif
 
 	if ((index->relam == BTREE_AM_OID) || entry->amcanorder)
 	{
@@ -1068,7 +1144,6 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 		index->opfamily[i] = entry->opfamily[i];
 		index->opcintype[i] = entry->opcintype[i];
 	}
-
 	/*
 	 * Fetch the ordering information for the index, if any. This is handled
 	 * in hypo_index_store_parsetree(). Again, adapted from plancat.c -
@@ -2000,6 +2075,28 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 		entry->tree_height = -1;	/* TODO */
 #endif
 	}
+	else if (entry->relam == GIST_AM_OID)
+	{
+		/*
+		 * GiST size depends on the operator class, so estimate leaf entries
+		 * from their width and reserve room for page and split overhead.
+		 */
+		line_size = ind_avg_width + MAXALIGN(sizeof(IndexTupleData))
+			+ sizeof(ItemIdData);
+		usable_page_size = BLCKSZ - SizeOfPageHeaderData
+			- MAXALIGN(sizeof(GISTPageOpaqueData));
+		if (fillfactor == 0)
+			fillfactor = HYPO_GIST_DEFAULT_FILLFACTOR;
+		additional_bloat = hypo_gist_additional_bloat(entry);
+		bloat_factor = (100.0 + additional_bloat) / fillfactor;
+
+		entry->pages = Max((BlockNumber) 1,
+						   (BlockNumber) ceil(entry->tuples * line_size
+											* bloat_factor / usable_page_size));
+#if PG_VERSION_NUM >= 90300
+		entry->tree_height = -1;
+#endif
+	}
 #if PG_VERSION_NUM >= 90500
 	else if (entry->relam == BRIN_AM_OID)
 	{
@@ -2198,6 +2295,583 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 }
 
 /*
+ * Variable-length GiST storage keys need more split/storage headroom than
+ * their source column width alone suggests.
+ */
+static bool
+hypo_gist_has_variable_key(hypoIndex * entry)
+{
+	int			i;
+
+	for (i = 0; i < entry->nkeycolumns; i++)
+	{
+		HeapTuple	tuple;
+		Form_pg_opclass opcrec;
+
+		tuple = SearchSysCache1(CLAOID,
+							 ObjectIdGetDatum(entry->opclass[i]));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "hypopg: cache lookup failed for opclass %u",
+				 entry->opclass[i]);
+
+		opcrec = (Form_pg_opclass) GETSTRUCT(tuple);
+		if (OidIsValid(opcrec->opckeytype) &&
+			get_typlen(opcrec->opckeytype) < 0)
+		{
+			ReleaseSysCache(tuple);
+			return true;
+		}
+
+		ReleaseSysCache(tuple);
+	}
+
+	return false;
+}
+
+/*
+ * Keep the generic GiST headroom conservative, but account for storage
+ * families whose real btree_gist representation is consistently different.
+ */
+static int
+hypo_gist_additional_bloat(hypoIndex * entry)
+{
+	int			additional_bloat = 30;
+	Oid			keytype = entry->opcintype[0];
+	char			typekind;
+
+	if (hypo_gist_has_variable_key(entry))
+		additional_bloat = 50;
+
+	if (entry->nkeycolumns == 1)
+	{
+		if (entry->indexkeys[0] > 0)
+			keytype = get_atttype(entry->relid, entry->indexkeys[0]);
+
+		typekind = get_typtype(keytype);
+		if (typekind == TYPTYPE_RANGE)
+			additional_bloat = 0;
+#if PG_VERSION_NUM >= 140000
+		else if (typekind == TYPTYPE_MULTIRANGE)
+			additional_bloat = 10;
+#endif
+		else if (hypo_gist_is_hstore_opclass(entry))
+			/* hstore's default signature is fixed-size after compression. */
+			additional_bloat = 20;
+		else if (hypo_gist_is_opclass(entry, "gist_cube_ops"))
+		{
+			int avg_width = entry->indexkeys[0] > 0 ?
+				get_attavgwidth(entry->relid, entry->indexkeys[0]) : 0;
+
+			if (hypo_gist_is_earth_col(entry, 0))
+				additional_bloat = HYPO_GIST_EARTH_ADDITIONAL_BLOAT;
+			else if (avg_width == HYPO_GIST_CUBE_3D_POINT_KEYSIZE)
+				additional_bloat = HYPO_GIST_CUBE_3D_POINT_BLOAT;
+			else if (avg_width == HYPO_GIST_CUBE_3D_BOX_KEYSIZE)
+				additional_bloat = HYPO_GIST_CUBE_3D_BOX_BLOAT;
+		}
+		else if (hypo_gist_is_opclass(entry, "gist__intbig_ops"))
+		{
+			/* Larger signatures need proportionally more split headroom. */
+			int siglen = hypo_gist_siglen(entry, 0,
+									 HYPO_GIST_INTBIG_DEFAULT_SIGLEN);
+
+			additional_bloat = 13 + siglen / 64;
+		}
+		else if (hypo_gist_is_opclass(entry, "gist__int_ops"))
+			/* Small leaf arrays remain variable-length until internal compression. */
+			additional_bloat = 92;
+		else if (hypo_gist_is_opclass(entry, "gist_ltree_ops"))
+			/* ltree signatures have higher split headroom than source width suggests. */
+			additional_bloat = HYPO_GIST_LTREE_ADDITIONAL_BLOAT;
+		else if (hypo_gist_is_opclass(entry, "gist__ltree_ops"))
+		{
+			int siglen = hypo_gist_siglen(entry, 0,
+									 HYPO_GIST_LTREE_ARRAY_DEFAULT_SIGLEN);
+
+			/* Wider ltree[] signatures have less split headroom in this corpus. */
+			if (siglen >= 64)
+				additional_bloat = HYPO_GIST_LTREE_ARRAY_SIGLEN_64_BLOAT;
+			else if (siglen >= 32)
+				additional_bloat = HYPO_GIST_LTREE_ARRAY_SIGLEN_32_BLOAT;
+			else
+				additional_bloat = HYPO_GIST_LTREE_ARRAY_DEFAULT_BLOAT;
+		}
+		else if (hypo_gist_is_opclass(entry, "tsvector_ops"))
+		{
+			int avg_width = entry->indexkeys[0] > 0 ?
+				get_attavgwidth(entry->relid, entry->indexkeys[0]) : 0;
+			int siglen = hypo_gist_siglen(entry, 0,
+									 HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN);
+
+			/* An external TOAST pointer is about 18 bytes in pg_statistic. */
+			if (avg_width <= HYPO_GIST_TSVECTOR_EXTERNAL_WIDTH)
+			{
+				if (siglen >= 512)
+					additional_bloat = HYPO_GIST_TSVECTOR_DENSE_SIGLEN_512_BLOAT;
+				else if (siglen >= 256)
+					additional_bloat = HYPO_GIST_TSVECTOR_DENSE_SIGLEN_256_BLOAT;
+				else
+					additional_bloat = HYPO_GIST_TSVECTOR_DENSE_DEFAULT_BLOAT;
+			}
+			else
+				additional_bloat = HYPO_GIST_TSVECTOR_INLINE_BLOAT;
+		}
+		else if (hypo_gist_is_opclass(entry, "gist_trgm_ops"))
+		{
+			int siglen = hypo_gist_siglen(entry, 0,
+									 HYPO_GIST_TRGM_DEFAULT_SIGLEN);
+
+			if (siglen == 64)
+				additional_bloat = HYPO_GIST_TRGM_SIGLEN_64_BLOAT;
+			else if (siglen == 32)
+				additional_bloat = HYPO_GIST_TRGM_SIGLEN_32_BLOAT;
+			else if (siglen == HYPO_GIST_TRGM_DEFAULT_SIGLEN)
+				additional_bloat = HYPO_GIST_TRGM_DEFAULT_BLOAT;
+		}
+		else if (hypo_gist_is_opclass(entry, "gist_bpchar_ops"))
+			/* bpchar keeps variable GiST bounds but has stable bounded width. */
+			additional_bloat = 13;
+		else if (hypo_gist_is_opclass(entry, "gist_bit_ops"))
+			/* bit's aligned source width is stable; retain normal headroom. */
+			additional_bloat = 30;
+		else if (hypo_gist_is_opclass(entry, "gist_vbit_ops"))
+			/* fixed-width varbit values have the same bounded split headroom. */
+			additional_bloat = 30;
+
+		switch (keytype)
+		{
+			case NUMERICOID:
+				additional_bloat = 30;
+				break;
+			case DATEOID:
+				additional_bloat = 15;
+				break;
+			case UUIDOID:
+				additional_bloat = 43;
+				break;
+		}
+	}
+
+	return additional_bloat;
+}
+
+static bool
+hypo_gist_is_opclass(hypoIndex * entry, const char *name)
+{
+	if (entry->nkeycolumns != 1)
+		return false;
+
+	return hypo_gist_is_opclass_col(entry, 0, name);
+}
+
+static const char *
+hypo_gist_opclass_extension(const char *name)
+{
+	static const char *const btree_gist_names[] = {
+		"gist_uuid_ops", "gist_oid_ops", "gist_int2_ops", "gist_int4_ops",
+		"gist_int8_ops", "gist_float4_ops", "gist_float8_ops",
+		"gist_timestamp_ops", "gist_timestamptz_ops", "gist_time_ops",
+		"gist_timetz_ops", "gist_date_ops", "gist_interval_ops",
+		"gist_cash_ops", "gist_macaddr_ops", "gist_text_ops", "gist_bpchar_ops",
+		"gist_bytea_ops", "gist_numeric_ops", "gist_bit_ops", "gist_vbit_ops",
+		"gist_inet_ops", "gist_cidr_ops", "gist_macaddr8_ops", "gist_enum_ops",
+		"gist_bool_ops"
+	};
+	int i;
+
+	for (i = 0; i < lengthof(btree_gist_names); i++)
+		if (strcmp(name, btree_gist_names[i]) == 0)
+			return "btree_gist";
+
+	if (strcmp(name, "gist_hstore_ops") == 0)
+		return "hstore";
+	if (strcmp(name, "gist_cube_ops") == 0)
+		return "cube";
+	if (strcmp(name, "gist__int_ops") == 0 ||
+		strcmp(name, "gist__intbig_ops") == 0)
+		return "intarray";
+	if (strcmp(name, "gist_ltree_ops") == 0 ||
+		strcmp(name, "gist__ltree_ops") == 0)
+		return "ltree";
+	if (strcmp(name, "gist_trgm_ops") == 0)
+		return "pg_trgm";
+	if (strcmp(name, "gist_geometry_ops_2d") == 0 ||
+		strcmp(name, "gist_geometry_ops_nd") == 0 ||
+		strcmp(name, "gist_geography_ops") == 0)
+		return "postgis";
+
+	return NULL;
+}
+
+static bool
+hypo_gist_is_opclass_col(hypoIndex * entry, int col, const char *name)
+{
+	HeapTuple	tuple;
+	Form_pg_opclass opcrec;
+	bool			matches;
+
+	if (entry->relam != GIST_AM_OID || col < 0 ||
+		col >= entry->nkeycolumns || !OidIsValid(entry->opclass[col]))
+		return false;
+
+	tuple = SearchSysCache1(CLAOID,
+							 ObjectIdGetDatum(entry->opclass[col]));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "hypopg: cache lookup failed for opclass %u",
+			 entry->opclass[col]);
+
+	opcrec = (Form_pg_opclass) GETSTRUCT(tuple);
+	matches = hypo_gist_opclass_matches(opcrec, entry->opclass[col], name);
+	ReleaseSysCache(tuple);
+
+	return matches;
+}
+
+static bool
+hypo_gist_opclass_matches(Form_pg_opclass opcrec, Oid opclass,
+							 const char *name)
+{
+	const char *extension;
+	Oid			extension_oid;
+
+	if (strcmp(NameStr(opcrec->opcname), name) != 0)
+		return false;
+
+	extension = hypo_gist_opclass_extension(name);
+	if (extension != NULL)
+	{
+		extension_oid = get_extension_oid(extension, true);
+		return OidIsValid(extension_oid) &&
+			getExtensionOfObject(OperatorClassRelationId, opclass) ==
+			extension_oid;
+	}
+
+	if (strcmp(name, "inet_ops") == 0 ||
+		strcmp(name, "cidr_ops") == 0 ||
+		strcmp(name, "tsvector_ops") == 0)
+		return opcrec->opcnamespace == PG_CATALOG_NAMESPACE;
+
+	return false;
+}
+
+static bool
+hypo_gist_is_hstore_opclass(hypoIndex * entry)
+{
+	return hypo_gist_is_opclass(entry, "gist_hstore_ops");
+}
+
+static bool
+hypo_gist_is_earth_type(Oid type)
+{
+	HeapTuple	tuple;
+	Form_pg_type typerec;
+	Oid			extension_oid;
+
+	if (!OidIsValid(type))
+		return false;
+
+	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type));
+	if (!HeapTupleIsValid(tuple))
+		return false;
+	typerec = (Form_pg_type) GETSTRUCT(tuple);
+	if (strcmp(NameStr(typerec->typname), "earth") != 0)
+	{
+		ReleaseSysCache(tuple);
+		return false;
+	}
+	ReleaseSysCache(tuple);
+
+	extension_oid = get_extension_oid("earthdistance", true);
+	return OidIsValid(extension_oid) &&
+		getExtensionOfObject(TypeRelationId, type) == extension_oid;
+}
+
+static bool
+hypo_gist_is_earth_col(hypoIndex * entry, int col)
+{
+	Node	   *expr;
+	int			pos;
+
+	if (entry->nkeycolumns <= col || col < 0)
+		return false;
+	if (entry->indexkeys[col] > 0)
+		return hypo_gist_is_earth_type(
+			get_atttype(entry->relid, entry->indexkeys[col]));
+
+	pos = 0;
+	for (int i = 0; i < col; i++)
+		if (entry->indexkeys[i] == 0)
+			pos++;
+	expr = list_nth(entry->indexprs, pos);
+	while (IsA(expr, RelabelType))
+		expr = (Node *) ((RelabelType *) expr)->arg;
+	return hypo_gist_is_earth_type(exprType(expr));
+}
+
+static int
+hypo_gist_numranges(hypoIndex * entry, int col, int default_numranges)
+{
+	int			numranges = default_numranges;
+	ListCell   *lc;
+
+#if PG_VERSION_NUM >= 90600
+	if (entry->opclassoptions == NULL || entry->opclassoptions[col] == NIL)
+		return numranges;
+
+	foreach(lc, entry->opclassoptions[col])
+	{
+		DefElem    *elem = (DefElem *) lfirst(lc);
+
+		if (strcmp(elem->defname, "numranges") == 0)
+		{
+			numranges = defGetInt32(elem);
+			break;
+		}
+	}
+#else
+	(void) entry;
+	(void) col;
+#endif
+
+	return numranges;
+}
+
+static int
+hypo_gist_siglen(hypoIndex * entry, int col, int default_siglen)
+{
+	int			siglen = default_siglen;
+	ListCell   *lc;
+
+#if PG_VERSION_NUM >= 90600
+	if (entry->opclassoptions == NULL || entry->opclassoptions[col] == NIL)
+		return siglen;
+
+	foreach(lc, entry->opclassoptions[col])
+	{
+		DefElem    *elem = (DefElem *) lfirst(lc);
+
+		if (strcmp(elem->defname, "siglen") == 0)
+		{
+			siglen = defGetInt32(elem);
+			break;
+		}
+	}
+#else
+	(void) entry;
+#endif
+
+	return siglen;
+}
+
+/* btree_gist stores multiranges as a bounded key, not all source fragments. */
+static int
+hypo_gist_index_colsize(hypoIndex * entry, Oid keytype, int width)
+{
+#if PG_VERSION_NUM >= 140000
+	if (entry->relam != GIST_AM_OID)
+		return width;
+
+	if (get_typtype(keytype) == TYPTYPE_MULTIRANGE)
+		return Min(width, HYPO_GIST_MULTIRANGE_MAX_WIDTH);
+#else
+	(void) entry;
+	(void) keytype;
+#endif
+
+	return width;
+}
+
+/* Known GiST opclasses with a fixed or bounded internal key representation. */
+static int
+hypo_gist_compressed_keysize(hypoIndex * entry, int col)
+{
+	HeapTuple	tuple;
+	Form_pg_opclass opcrec;
+	int			width = -1;
+	Oid			keytype;
+	int			avg_width;
+
+	if (entry->relam != GIST_AM_OID || col < 0 ||
+		col >= entry->nkeycolumns || !OidIsValid(entry->opclass[col]))
+		return width;
+
+	tuple = SearchSysCache1(CLAOID,
+							 ObjectIdGetDatum(entry->opclass[col]));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "hypopg: cache lookup failed for opclass %u",
+			 entry->opclass[col]);
+
+	opcrec = (Form_pg_opclass) GETSTRUCT(tuple);
+	if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist_geometry_ops_nd"))
+		/* PostGIS ND keys are fixed-size. */
+		width = HYPO_GIST_GEOMETRY_ND_KEYSIZE;
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+									   "gist_geometry_ops_2d") &&
+			 OidIsValid(opcrec->opckeytype) &&
+			 get_typlen(opcrec->opckeytype) > 0)
+		width = get_typlen(opcrec->opckeytype);
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist_geography_ops"))
+		/* PostGIS compresses all 2D geography keys to a fixed-size gidx. */
+		width = 32;
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist_hstore_ops"))
+		/* hstore's compressed key is GISTTYPE plus its validated signature. */
+		width = HYPO_GIST_SIGNATURE_KEY_HEADER +
+			hypo_gist_siglen(entry, col, HYPO_GIST_HSTORE_DEFAULT_SIGLEN);
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist__intbig_ops"))
+		/* intarray's big signature key is GISTTYPE plus its validated signature. */
+		width = HYPO_GIST_SIGNATURE_KEY_HEADER +
+			hypo_gist_siglen(entry, col, HYPO_GIST_INTBIG_DEFAULT_SIGLEN);
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist__ltree_ops"))
+		/* ltree[] uses a fixed signature after array compression. */
+		width = HYPO_GIST_SIGNATURE_KEY_HEADER +
+			hypo_gist_siglen(entry, col, HYPO_GIST_LTREE_ARRAY_DEFAULT_SIGLEN);
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist_cube_ops"))
+	{
+		/*
+		 * cube points and 3-D boxes are 32 and 56 bytes respectively.
+		 * Keep analyzed widths for the common fixed 3-D forms so higher-
+		 * dimensional or mixed-dimensional cubes retain the generic path.
+		 */
+		if (entry->indexkeys[col] > 0)
+		{
+			avg_width = get_attavgwidth(entry->relid, entry->indexkeys[col]);
+			if (avg_width == HYPO_GIST_CUBE_3D_POINT_KEYSIZE ||
+				avg_width == HYPO_GIST_CUBE_3D_BOX_KEYSIZE)
+				width = avg_width;
+		}
+		else
+		{
+			if (hypo_gist_is_earth_col(entry, col))
+				width = HYPO_GIST_CUBE_3D_POINT_KEYSIZE;
+		}
+	}
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "tsvector_ops") &&
+			 entry->indexkeys[col] > 0)
+	{
+		avg_width = get_attavgwidth(entry->relid, entry->indexkeys[col]);
+		if (avg_width <= HYPO_GIST_TSVECTOR_EXTERNAL_WIDTH)
+			width = HYPO_GIST_SIGNATURE_KEY_HEADER +
+				hypo_gist_siglen(entry, col, HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN);
+		else if (avg_width > 0)
+		{
+			/* Near the TOAST boundary, leaves mix CRC arrays and signatures. */
+			int siglen = hypo_gist_siglen(entry, col,
+									 HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN);
+
+			width = Max(HYPO_GIST_SIGNATURE_KEY_HEADER,
+						avg_width / 4 + HYPO_GIST_SIGNATURE_KEY_HEADER + 3);
+			if (siglen > HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN)
+				width += (siglen - HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN) / 12;
+		}
+	}
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist__int_ops"))
+	{
+		/* intarray range keys are one-dimensional int4 arrays of endpoints. */
+		width = 2 * sizeof(int32) +
+			2 * sizeof(int32) * hypo_gist_numranges(entry, col,
+											 HYPO_GIST_INT_DEFAULT_NUMRANGES);
+		if (entry->indexkeys[col] > 0)
+		{
+			avg_width = get_attavgwidth(entry->relid, entry->indexkeys[col]);
+			if (avg_width > 0)
+				width = Min(width, avg_width);
+		}
+	}
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist_trgm_ops"))
+	{
+		/* Trigram leaves are compact arrays; source text width is not reusable. */
+		width = HYPO_GIST_TRGM_LEAF_KEYSIZE;
+		if (entry->indexkeys[col] > 0)
+		{
+			avg_width = get_attavgwidth(entry->relid, entry->indexkeys[col]);
+			if (avg_width > 0)
+				width = Min(width, avg_width);
+		}
+	}
+	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col], "inet_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "cidr_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_inet_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_cidr_ops"))
+	{
+		/*
+		 * Core network GiST keys are 8 bytes for IPv4 and 20 bytes for
+		 * IPv6.  The btree_gist network classes use gbtreekey16 with the
+		 * same calibrated effective width as the other fixed scalar classes.
+		 * Add the fixed GiST union/tuple headroom to the analyzed source
+		 * width for core classes, while retaining that effective width for
+		 * btree_gist's lossy classes.
+		 */
+		width = 16;
+		if (entry->indexkeys[col] > 0)
+		{
+			keytype = get_atttype(entry->relid, entry->indexkeys[col]);
+			avg_width = get_attavgwidth(entry->relid, entry->indexkeys[col]);
+			if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+									  "gist_inet_ops") ||
+				hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+									  "gist_cidr_ops"))
+				width = 8;
+			else if (keytype == INETOID)
+				width = Max(width, avg_width + 8);
+			else if (keytype == CIDROID && avg_width > 0)
+			{
+				if (avg_width <= 7)
+					width = avg_width + 3;
+				else if (avg_width < 19)
+					width = avg_width + 6;
+				else
+					width = avg_width + 7;
+			}
+		}
+	}
+	else if (entry->nkeycolumns == 1 &&
+			 (hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_bool_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_int2_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_int4_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_float4_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_oid_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_enum_ops")))
+		/* btree_gist's fixed scalar keys share the calibrated leaf width. */
+		width = 2;
+	else if (entry->nkeycolumns == 1 &&
+			 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+									 "gist_date_ops"))
+		/* date's four-byte source value is already a stable effective width. */
+		width = 4;
+	else if (entry->nkeycolumns == 1 &&
+			 (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+									 "gist_cash_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist_macaddr_ops") ||
+				 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+								  "gist_macaddr8_ops")))
+		/* These fixed btree_gist families use an eight-byte effective width. */
+		width = 8;
+	else if (entry->nkeycolumns == 1 &&
+			 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+									 "gist_timetz_ops"))
+		/* timetz compresses to the same effective leaf width as time. */
+		width = 8;
+	else if (entry->nkeycolumns == 1 &&
+			 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
+									 "gist_interval_ops"))
+		/* interval has a wider compressed key than time/timetz. */
+		width = 19;
+
+	ReleaseSysCache(tuple);
+	return width;
+}
+
+/*
  * Estimate a single index's column of an hypothetical index.
  */
 static int
@@ -2205,11 +2879,20 @@ hypo_estimate_index_colsize(hypoIndex * entry, int col)
 {
 	int			i,
 				pos;
+	Oid			keytype;
 	Node	   *expr;
 
 	/* If simple attribute, return avg width */
 	if (entry->indexkeys[col] != 0)
-		return get_attavgwidth(entry->relid, entry->indexkeys[col]);
+	{
+		i = hypo_gist_compressed_keysize(entry, col);
+		if (i > 0)
+			return i;
+
+		return hypo_gist_index_colsize(entry,
+			get_atttype(entry->relid, entry->indexkeys[col]),
+			get_attavgwidth(entry->relid, entry->indexkeys[col]));
+	}
 
 	/* It's an expression */
 	pos = 0;
@@ -2222,9 +2905,16 @@ hypo_estimate_index_colsize(hypoIndex * entry, int col)
 	}
 
 	expr = (Node *) list_nth(entry->indexprs, pos);
+	i = hypo_gist_compressed_keysize(entry, col);
+	if (i > 0)
+		return i;
 
 	if (IsA(expr, Var) &&((Var *) expr)->varattno != InvalidAttrNumber)
-		return get_attavgwidth(entry->relid, ((Var *) expr)->varattno);
+	{
+		return hypo_gist_index_colsize(entry,
+			get_atttype(entry->relid, ((Var *) expr)->varattno),
+			get_attavgwidth(entry->relid, ((Var *) expr)->varattno));
+	}
 
 	if (IsA(expr, FuncExpr))
 	{
@@ -2257,6 +2947,12 @@ hypo_estimate_index_colsize(hypoIndex * entry, int col)
 		}
 	}
 
+	/* Use the expression result type before falling back to a gross width. */
+	keytype = exprType(expr);
+	if (OidIsValid(keytype))
+		return hypo_gist_index_colsize(entry, keytype,
+									   get_typavgwidth(keytype, -1));
+
 	return 50;					/* default fallback estimate */
 }
 
@@ -2275,6 +2971,10 @@ hypo_can_return(hypoIndex * entry, Oid atttype, int i, char *amname)
 	if (!RegProcedureIsValid(entry->amcanreturn))
 		return false;
 #endif
+
+	/* INCLUDE columns are stored verbatim and have no opclass metadata. */
+	if (i >= entry->nkeycolumns)
+		return true;
 
 	switch (entry->relam)
 	{

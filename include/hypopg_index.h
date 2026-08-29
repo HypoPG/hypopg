@@ -64,6 +64,9 @@ typedef struct hypoIndex
 	Oid		   *opfamily;		/* OIDs of operator families for columns */
 	Oid		   *opclass;		/* OIDs of opclass data types */
 	Oid		   *opcintype;		/* OIDs of opclass declared input data types */
+#if PG_VERSION_NUM >= 90600
+	List	  **opclassoptions;	/* opclass-specific options for columns */
+#endif
 	Oid		   *sortopfamily;	/* OIDs of btree opfamilies, if orderable */
 	bool	   *reverse_sort;	/* is sort order descending? */
 	bool	   *nulls_first;	/* do NULLs come first in the sort order? */

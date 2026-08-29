@@ -18,7 +18,7 @@ post](https://rjuju.github.io/postgresql/2015/07/02/how-about-hypothetical-index
 Installation
 ------------
 
-- Compatible with PostgreSQL 9.2 and above
+- Compatible with PostgreSQL 14 and above
 - Needs PostgreSQL header files
 - Decompress the tarball
 - `sudo make install`
