@@ -8,5 +8,13 @@ SELECT hypopg_analyze('hypo_analyze');
  
 (1 row)
 
+SELECT hypopg_reset();
+ hypopg_reset 
+--------------
+ 
+(1 row)
+
 SELECT hypopg_analyze('hypo_analyze', 0);
+ERROR:  hypopg: sample fraction must be greater than 0 and at most 100
+SELECT hypopg_analyze('hypo_analyze', 100.1);
 ERROR:  hypopg: sample fraction must be greater than 0 and at most 100

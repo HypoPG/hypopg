@@ -5,4 +5,6 @@ INSERT INTO hypo_analyze
 SELECT i, 'value ' || i FROM generate_series(1, 100000) AS g(i);
 
 SELECT hypopg_analyze('hypo_analyze');
+SELECT hypopg_reset();
 SELECT hypopg_analyze('hypo_analyze', 0);
+SELECT hypopg_analyze('hypo_analyze', 100.1);

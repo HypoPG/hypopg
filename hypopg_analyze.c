@@ -27,7 +27,6 @@
 #include "include/hypopg.h"
 #include "include/hypopg_analyze.h"
 
-#define HYPO_ANALYZE_DEFAULT_FRACTION 1.0f
 #define HYPO_ANALYZE_MAX_ROWS 1024
 #define HYPO_ANALYZE_MIN_ROWS 32
 
