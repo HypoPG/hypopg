@@ -52,7 +52,9 @@ static List *hypoAnalyzeRelations = NIL;
 static List *hypoAnalyzeExpressions = NIL;
 
 static bool hypo_analyze_sample(Relation relation, const char *target,
-								float4 fraction, HypoAnalyzeStats *stats);
+								float4 fraction,
+								HypoAnalyzeValueCallback callback, void *arg,
+								HypoAnalyzeStats *stats);
 static bool hypo_analyze_relation_internal(Relation relation, float4 fraction,
 										 HypoAnalyzeRelation **result);
 static int hypo_analyze_datum_width(Datum value, Form_pg_attribute attr);
@@ -107,12 +109,15 @@ hypo_analyze_datum_width(Datum value, Form_pg_attribute attr)
 
 static bool
 hypo_analyze_sample(Relation relation, const char *target, float4 fraction,
+					HypoAnalyzeValueCallback callback, void *arg,
 					HypoAnalyzeStats *stats)
 {
 #if PG_VERSION_NUM < 90500
 	(void) relation;
 	(void) target;
 	(void) fraction;
+	(void) callback;
+	(void) arg;
 	(void) stats;
 	return false;
 #else
@@ -180,6 +185,8 @@ hypo_analyze_sample(Relation relation, const char *target, float4 fraction,
 				nullrows++;
 			else
 				width += hypo_analyze_datum_width(value, attr);
+			if (callback != NULL)
+				callback(value, isnull, attr->atttypid, attr->attcollation, arg);
 		}
 
 		stats->rows = SPI_processed;
@@ -418,6 +425,50 @@ hypo_analyze_attribute(Oid relid, AttrNumber attnum, float4 fraction,
 }
 
 bool
+hypo_analyze_attribute_callback(Oid relid, AttrNumber attnum, float4 fraction,
+								 HypoAnalyzeValueCallback callback, void *arg,
+								 HypoAnalyzeStats *stats)
+{
+#if PG_VERSION_NUM < 90500
+	(void) relid;
+	(void) attnum;
+	(void) fraction;
+	(void) callback;
+	(void) arg;
+	(void) stats;
+	return false;
+#else
+	Relation		 relation;
+	Form_pg_attribute attr;
+	const char		*target;
+	bool				 result;
+
+	if (callback == NULL || !hypo_analyze_fraction(fraction) || attnum <= 0)
+		return false;
+
+	relation = table_open(relid, AccessShareLock);
+	if (attnum > RelationGetNumberOfAttributes(relation))
+	{
+		table_close(relation, AccessShareLock);
+		return false;
+	}
+
+	attr = TupleDescAttr(relation->rd_att, attnum - 1);
+	if (attr->attisdropped)
+	{
+		table_close(relation, AccessShareLock);
+		return false;
+	}
+
+	target = quote_identifier(NameStr(attr->attname));
+	result = hypo_analyze_sample(relation, target, fraction, callback, arg,
+								 stats);
+	table_close(relation, AccessShareLock);
+	return result;
+#endif
+}
+
+bool
 hypo_analyze_expression(Oid relid, Node *expr, float4 fraction,
 						HypoAnalyzeStats *stats)
 {
@@ -457,7 +508,8 @@ hypo_analyze_expression(Oid relid, Node *expr, float4 fraction,
 		}
 	}
 
-	if (!hypo_analyze_sample(relation, deparsed, fraction, stats))
+	if (!hypo_analyze_sample(relation, deparsed, fraction, NULL, NULL,
+							 stats))
 	{
 		table_close(relation, AccessShareLock);
 		return false;
