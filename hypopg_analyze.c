@@ -59,6 +59,10 @@ static bool hypo_analyze_relation_internal(Relation relation, float4 fraction,
 static int hypo_analyze_datum_width(Datum value, Form_pg_attribute attr);
 static bool hypo_analyze_fraction(float4 fraction);
 
+#if PG_VERSION_NUM >= 90500
+static char *hypo_analyze_deparse_expression(Relation relation, Node *expr);
+#endif
+
 PG_FUNCTION_INFO_V1(hypopg_analyze);
 
 void
@@ -91,6 +95,45 @@ hypo_analyze_fraction(float4 fraction)
 {
 	return isfinite(fraction) && fraction > 0.0f && fraction <= 100.0f;
 }
+
+#if PG_VERSION_NUM >= 90500
+static char *
+hypo_analyze_deparse_expression(Relation relation, Node *expr)
+{
+	List	   *context;
+	char	   *deparsed;
+	Oid		save_userid;
+	int		save_sec_context;
+	int		save_nestlevel;
+	bool		save_enabled = hypo_is_enabled;
+
+	GetUserIdAndSecContext(&save_userid, &save_sec_context);
+	save_nestlevel = NewGUCNestLevel();
+	PG_TRY();
+	{
+		SetUserIdAndSecContext(RelationGetForm(relation)->relowner,
+							   save_sec_context | SECURITY_RESTRICTED_OPERATION);
+		RestrictSearchPath();
+		hypo_is_enabled = false;
+		context = deparse_context_for(RelationGetRelationName(relation),
+									  RelationGetRelid(relation));
+		deparsed = deparse_expression(expr, context, true, false);
+		AtEOXact_GUC(false, save_nestlevel);
+		SetUserIdAndSecContext(save_userid, save_sec_context);
+		hypo_is_enabled = save_enabled;
+	}
+	PG_CATCH();
+	{
+		AtEOXact_GUC(false, save_nestlevel);
+		SetUserIdAndSecContext(save_userid, save_sec_context);
+		hypo_is_enabled = save_enabled;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	return deparsed;
+}
+#endif
 
 static int
 hypo_analyze_datum_width(Datum value, Form_pg_attribute attr)
@@ -482,7 +525,6 @@ hypo_analyze_expression_callback(Oid relid, Node *expr, float4 fraction,
 	return false;
 #else
 	Relation	relation;
-	List	   *context;
 	char	   *deparsed;
 	bool		result;
 
@@ -490,8 +532,7 @@ hypo_analyze_expression_callback(Oid relid, Node *expr, float4 fraction,
 		return false;
 
 	relation = table_open(relid, AccessShareLock);
-	context = deparse_context_for(RelationGetRelationName(relation), relid);
-	deparsed = deparse_expression(expr, context, true, false);
+	deparsed = hypo_analyze_deparse_expression(relation, expr);
 	result = hypo_analyze_sample(relation, deparsed, fraction, callback, arg,
 								 stats);
 	pfree(deparsed);
@@ -512,7 +553,6 @@ hypo_analyze_expression(Oid relid, Node *expr, float4 fraction,
 	return false;
 #else
 	Relation	relation;
-	List	   *context;
 	char	   *deparsed;
 	HypoAnalyzeExpression *cached;
 
@@ -520,8 +560,7 @@ hypo_analyze_expression(Oid relid, Node *expr, float4 fraction,
 		return false;
 
 	relation = table_open(relid, AccessShareLock);
-	context = deparse_context_for(RelationGetRelationName(relation), relid);
-	deparsed = deparse_expression(expr, context, true, false);
+	deparsed = hypo_analyze_deparse_expression(relation, expr);
 	{
 		ListCell   *lc;
 
