@@ -1794,7 +1794,7 @@ hypo_set_indexname(hypoIndex *entry, char *indexname)
 								 * and an extra null char.*/
 	int			totalsize;
 
-	snprintf(oid, sizeof(oid), "<%d>", entry->oid);
+	snprintf(oid, sizeof(oid), "<%u>", entry->oid);
 
 	/* we'll prefix the given indexname with the oid, and reserve a final \0 */
 	totalsize = strlen(oid) + strlen(indexname) + 1;
