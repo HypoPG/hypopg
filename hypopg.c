@@ -580,7 +580,7 @@ hypo_build_simple_rel_hook(PlannerInfo *root,
 PGDLLEXPORT Datum
 hypopg_reset(PG_FUNCTION_ARGS)
 {
-	hypo_index_reset();
 	hypo_analyze_reset();
+	hypo_index_reset();
 	PG_RETURN_VOID();
 }
