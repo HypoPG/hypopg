@@ -491,7 +491,7 @@ hypo_analyze_expression_callback(Oid relid, Node *expr, float4 fraction,
 
 	relation = table_open(relid, AccessShareLock);
 	context = deparse_context_for(RelationGetRelationName(relation), relid);
-	deparsed = deparse_expression(expr, context, false, false);
+	deparsed = deparse_expression(expr, context, true, false);
 	result = hypo_analyze_sample(relation, deparsed, fraction, callback, arg,
 								 stats);
 	pfree(deparsed);
@@ -521,7 +521,7 @@ hypo_analyze_expression(Oid relid, Node *expr, float4 fraction,
 
 	relation = table_open(relid, AccessShareLock);
 	context = deparse_context_for(RelationGetRelationName(relation), relid);
-	deparsed = deparse_expression(expr, context, false, false);
+	deparsed = deparse_expression(expr, context, true, false);
 	{
 		ListCell   *lc;
 
