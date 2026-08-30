@@ -221,6 +221,8 @@ hypo_analyze_sample(Relation relation, const char *target, float4 fraction,
 			bool		isnull;
 			Datum		value;
 
+			CHECK_FOR_INTERRUPTS();
+
 			value = SPI_getbinval(SPI_tuptable->vals[row], tupdesc, 1,
 								  &isnull);
 			if (isnull)
@@ -350,6 +352,8 @@ hypo_analyze_relation_internal(Relation relation, float4 fraction,
 			tupdesc = SPI_tuptable->tupdesc;
 			for (row = 0; row < SPI_processed; row++)
 			{
+				CHECK_FOR_INTERRUPTS();
+
 				for (attno = 0; attno < entry->natts; attno++)
 				{
 					bool		isnull;

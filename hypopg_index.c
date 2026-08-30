@@ -2297,8 +2297,7 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 }
 
 /*
- * Variable-length GiST storage keys need more split/storage headroom than
- * their source column width alone suggests.
+ * Variable-length GiST keys need extra storage headroom.
  */
 static bool
 hypo_gist_has_variable_key(hypoIndex * entry)
@@ -2331,8 +2330,7 @@ hypo_gist_has_variable_key(hypoIndex * entry)
 }
 
 /*
- * Keep the generic GiST headroom conservative, but account for storage
- * families whose real btree_gist representation is consistently different.
+ * Adjust the default headroom for known storage representations.
  */
 static int
 hypo_gist_additional_bloat(hypoIndex * entry)
@@ -2357,7 +2355,6 @@ hypo_gist_additional_bloat(hypoIndex * entry)
 			additional_bloat = 10;
 #endif
 		else if (hypo_gist_is_hstore_opclass(entry))
-			/* hstore's default signature is fixed-size after compression. */
 			additional_bloat = 20;
 		else if (hypo_gist_is_opclass(entry, "gist_cube_ops"))
 		{
@@ -2373,24 +2370,20 @@ hypo_gist_additional_bloat(hypoIndex * entry)
 		}
 		else if (hypo_gist_is_opclass(entry, "gist__intbig_ops"))
 		{
-			/* Larger signatures need proportionally more split headroom. */
 			int siglen = hypo_gist_siglen(entry, 0,
 									 HYPO_GIST_INTBIG_DEFAULT_SIGLEN);
 
 			additional_bloat = 13 + siglen / 64;
 		}
 		else if (hypo_gist_is_opclass(entry, "gist__int_ops"))
-			/* Small leaf arrays remain variable-length until internal compression. */
 			additional_bloat = 92;
 		else if (hypo_gist_is_opclass(entry, "gist_ltree_ops"))
-			/* ltree signatures have higher split headroom than source width suggests. */
 			additional_bloat = HYPO_GIST_LTREE_ADDITIONAL_BLOAT;
 		else if (hypo_gist_is_opclass(entry, "gist__ltree_ops"))
 		{
 			int siglen = hypo_gist_siglen(entry, 0,
 									 HYPO_GIST_LTREE_ARRAY_DEFAULT_SIGLEN);
 
-			/* Wider ltree[] signatures have less split headroom in this corpus. */
 			if (siglen >= 64)
 				additional_bloat = HYPO_GIST_LTREE_ARRAY_SIGLEN_64_BLOAT;
 			else if (siglen >= 32)
@@ -2405,7 +2398,6 @@ hypo_gist_additional_bloat(hypoIndex * entry)
 			int siglen = hypo_gist_siglen(entry, 0,
 									 HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN);
 
-			/* An external TOAST pointer is about 18 bytes in pg_statistic. */
 			if (avg_width <= HYPO_GIST_TSVECTOR_EXTERNAL_WIDTH)
 			{
 				if (siglen >= 512)
@@ -2431,13 +2423,10 @@ hypo_gist_additional_bloat(hypoIndex * entry)
 				additional_bloat = HYPO_GIST_TRGM_DEFAULT_BLOAT;
 		}
 		else if (hypo_gist_is_opclass(entry, "gist_bpchar_ops"))
-			/* bpchar keeps variable GiST bounds but has stable bounded width. */
 			additional_bloat = 13;
 		else if (hypo_gist_is_opclass(entry, "gist_bit_ops"))
-			/* bit's aligned source width is stable; retain normal headroom. */
 			additional_bloat = 30;
 		else if (hypo_gist_is_opclass(entry, "gist_vbit_ops"))
-			/* fixed-width varbit values have the same bounded split headroom. */
 			additional_bloat = 30;
 
 		switch (keytype)
@@ -2665,7 +2654,6 @@ hypo_gist_siglen(hypoIndex * entry, int col, int default_siglen)
 	return siglen;
 }
 
-/* btree_gist stores multiranges as a bounded key, not all source fragments. */
 static int
 hypo_gist_index_colsize(hypoIndex * entry, Oid keytype, int width)
 {
@@ -2683,7 +2671,6 @@ hypo_gist_index_colsize(hypoIndex * entry, Oid keytype, int width)
 	return width;
 }
 
-/* Known GiST opclasses with a fixed or bounded internal key representation. */
 static int
 hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 {
@@ -2706,7 +2693,6 @@ hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 	opcrec = (Form_pg_opclass) GETSTRUCT(tuple);
 	if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist_geometry_ops_nd"))
-		/* PostGIS ND keys are fixed-size. */
 		width = HYPO_GIST_GEOMETRY_ND_KEYSIZE;
 	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 									   "gist_geometry_ops_2d") &&
@@ -2715,31 +2701,23 @@ hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 		width = get_typlen(opcrec->opckeytype);
 	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist_geography_ops"))
-		/* PostGIS compresses all 2D geography keys to a fixed-size gidx. */
 		width = 32;
 	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist_hstore_ops"))
-		/* hstore's compressed key is GISTTYPE plus its validated signature. */
 		width = HYPO_GIST_SIGNATURE_KEY_HEADER +
 			hypo_gist_siglen(entry, col, HYPO_GIST_HSTORE_DEFAULT_SIGLEN);
 	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist__intbig_ops"))
-		/* intarray's big signature key is GISTTYPE plus its validated signature. */
 		width = HYPO_GIST_SIGNATURE_KEY_HEADER +
 			hypo_gist_siglen(entry, col, HYPO_GIST_INTBIG_DEFAULT_SIGLEN);
 	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist__ltree_ops"))
-		/* ltree[] uses a fixed signature after array compression. */
 		width = HYPO_GIST_SIGNATURE_KEY_HEADER +
 			hypo_gist_siglen(entry, col, HYPO_GIST_LTREE_ARRAY_DEFAULT_SIGLEN);
 	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist_cube_ops"))
 	{
-		/*
-		 * cube points and 3-D boxes are 32 and 56 bytes respectively.
-		 * Keep analyzed widths for the common fixed 3-D forms so higher-
-		 * dimensional or mixed-dimensional cubes retain the generic path.
-		 */
+		/* Keep mixed-dimensional cubes on the generic width path. */
 		if (entry->indexkeys[col] > 0)
 		{
 			avg_width = get_attavgwidth(entry->relid, entry->indexkeys[col]);
@@ -2763,7 +2741,6 @@ hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 				hypo_gist_siglen(entry, col, HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN);
 		else if (avg_width > 0)
 		{
-			/* Near the TOAST boundary, leaves mix CRC arrays and signatures. */
 			int siglen = hypo_gist_siglen(entry, col,
 									 HYPO_GIST_TSVECTOR_DEFAULT_SIGLEN);
 
@@ -2776,7 +2753,6 @@ hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist__int_ops"))
 	{
-		/* intarray range keys are one-dimensional int4 arrays of endpoints. */
 		width = 2 * sizeof(int32) +
 			2 * sizeof(int32) * hypo_gist_numranges(entry, col,
 											 HYPO_GIST_INT_DEFAULT_NUMRANGES);
@@ -2790,7 +2766,6 @@ hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 	else if (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist_trgm_ops"))
 	{
-		/* Trigram leaves are compact arrays; source text width is not reusable. */
 		width = HYPO_GIST_TRGM_LEAF_KEYSIZE;
 		if (entry->indexkeys[col] > 0)
 		{
@@ -2804,14 +2779,7 @@ hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_inet_ops") ||
 				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_cidr_ops"))
 	{
-		/*
-		 * Core network GiST keys are 8 bytes for IPv4 and 20 bytes for
-		 * IPv6.  The btree_gist network classes use gbtreekey16 with the
-		 * same calibrated effective width as the other fixed scalar classes.
-		 * Add the fixed GiST union/tuple headroom to the analyzed source
-		 * width for core classes, while retaining that effective width for
-		 * btree_gist's lossy classes.
-		 */
+		/* Core and btree_gist network classes use different key widths. */
 		width = 16;
 		if (entry->indexkeys[col] > 0)
 		{
@@ -2842,12 +2810,10 @@ hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_float4_ops") ||
 				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_oid_ops") ||
 				 hypo_gist_opclass_matches(opcrec, entry->opclass[col], "gist_enum_ops")))
-		/* btree_gist's fixed scalar keys share the calibrated leaf width. */
 		width = 2;
 	else if (entry->nkeycolumns == 1 &&
 			 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 									 "gist_date_ops"))
-		/* date's four-byte source value is already a stable effective width. */
 		width = 4;
 	else if (entry->nkeycolumns == 1 &&
 			 (hypo_gist_opclass_matches(opcrec, entry->opclass[col],
@@ -2856,17 +2822,14 @@ hypo_gist_compressed_keysize(hypoIndex * entry, int col)
 								  "gist_macaddr_ops") ||
 				 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 								  "gist_macaddr8_ops")))
-		/* These fixed btree_gist families use an eight-byte effective width. */
 		width = 8;
 	else if (entry->nkeycolumns == 1 &&
 			 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 									 "gist_timetz_ops"))
-		/* timetz compresses to the same effective leaf width as time. */
 		width = 8;
 	else if (entry->nkeycolumns == 1 &&
 			 hypo_gist_opclass_matches(opcrec, entry->opclass[col],
 									 "gist_interval_ops"))
-		/* interval has a wider compressed key than time/timetz. */
 		width = 19;
 
 	ReleaseSysCache(tuple);
@@ -2967,7 +2930,7 @@ hypo_estimate_index_colsize(hypoIndex * entry, int col)
 			return hypo_gist_index_colsize(entry, exprType(expr), stats.width);
 	}
 
-	/* Use the expression result type before falling back to a gross width. */
+	/* Use the expression type before falling back to a generic width. */
 	keytype = exprType(expr);
 	if (OidIsValid(keytype))
 		return hypo_gist_index_colsize(entry, keytype,
@@ -2992,7 +2955,7 @@ hypo_can_return(hypoIndex * entry, Oid atttype, int i, char *amname)
 		return false;
 #endif
 
-	/* INCLUDE columns are stored verbatim and have no opclass metadata. */
+	/* INCLUDE columns have no operator-class metadata. */
 	if (i >= entry->nkeycolumns)
 		return true;
 

@@ -65,7 +65,7 @@ typedef struct hypoIndex
 	Oid		   *opclass;		/* OIDs of opclass data types */
 	Oid		   *opcintype;		/* OIDs of opclass declared input data types */
 #if PG_VERSION_NUM >= 90600
-	List	  **opclassoptions;	/* opclass-specific options for columns */
+	List	  **opclassoptions;	/* options supplied for each key column */
 #endif
 	Oid		   *sortopfamily;	/* OIDs of btree opfamilies, if orderable */
 	bool	   *reverse_sort;	/* is sort order descending? */
