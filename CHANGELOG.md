@@ -8,10 +8,6 @@ Unreleased
 
   - Add GiST index costing support.
 
-  **Miscellaneous**:
-
-  - Raise the supported PostgreSQL minimum to 14.
-
 2026-06-20 version 1.4.3:
 -------------------------
 

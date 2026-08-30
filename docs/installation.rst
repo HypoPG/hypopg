@@ -6,7 +6,7 @@ Installation
 Requirements
 ------------
 
-- PostgreSQL 14+
+- PostgreSQL 9.2+
 
 Packages
 --------

@@ -6,7 +6,7 @@ HypoPG
 `HypoPG <https://github.com/HypoPG/hypopg>`_ is a `PostgreSQL
 <https://postgresql.org>`_ extension, adding support for
 :ref:`hypothetical_indexes`.
-It's compatible with **PostgreSQL 14 and above**.
+It's compatible with **PostgreSQL 9.2 and above**.
 
 .. note::
 
