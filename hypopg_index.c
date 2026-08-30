@@ -979,6 +979,8 @@ hypo_index_pfree(hypoIndex * entry)
 #if PG_VERSION_NUM >= 90500
 	pfree(entry->canreturn);
 #endif
+	if (entry->options)
+		pfree(entry->options);
 	/* finally pfree the entry */
 	pfree(entry);
 }
