@@ -468,6 +468,39 @@ hypo_analyze_attribute_callback(Oid relid, AttrNumber attnum, float4 fraction,
 }
 
 bool
+hypo_analyze_expression_callback(Oid relid, Node *expr, float4 fraction,
+								  HypoAnalyzeValueCallback callback, void *arg,
+								  HypoAnalyzeStats *stats)
+{
+#if PG_VERSION_NUM < 90500
+	(void) relid;
+	(void) expr;
+	(void) fraction;
+	(void) callback;
+	(void) arg;
+	(void) stats;
+	return false;
+#else
+	Relation	relation;
+	List	   *context;
+	char	   *deparsed;
+	bool		result;
+
+	if (callback == NULL || expr == NULL || !hypo_analyze_fraction(fraction))
+		return false;
+
+	relation = table_open(relid, AccessShareLock);
+	context = deparse_context_for(RelationGetRelationName(relation), relid);
+	deparsed = deparse_expression(expr, context, false, false);
+	result = hypo_analyze_sample(relation, deparsed, fraction, callback, arg,
+								 stats);
+	pfree(deparsed);
+	table_close(relation, AccessShareLock);
+	return result;
+#endif
+}
+
+bool
 hypo_analyze_expression(Oid relid, Node *expr, float4 fraction,
 						HypoAnalyzeStats *stats)
 {

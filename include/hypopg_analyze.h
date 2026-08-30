@@ -33,6 +33,10 @@ bool		hypo_analyze_attribute_callback(Oid relid, AttrNumber attnum,
 									float4 fraction,
 									HypoAnalyzeValueCallback callback,
 									void *arg, HypoAnalyzeStats *stats);
+bool		hypo_analyze_expression_callback(Oid relid, Node *expr,
+									float4 fraction,
+									HypoAnalyzeValueCallback callback,
+									void *arg, HypoAnalyzeStats *stats);
 bool		hypo_analyze_expression(Oid relid, Node *expr,
 							float4 fraction, HypoAnalyzeStats *stats);
 PGDLLEXPORT Datum hypopg_analyze(PG_FUNCTION_ARGS);
