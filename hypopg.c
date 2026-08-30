@@ -37,6 +37,7 @@
 #include "utils/elog.h"
 
 #include "include/hypopg.h"
+#include "include/hypopg_analyze.h"
 #include "include/hypopg_import.h"
 #include "include/hypopg_index.h"
 
@@ -580,5 +581,6 @@ PGDLLEXPORT Datum
 hypopg_reset(PG_FUNCTION_ARGS)
 {
 	hypo_index_reset();
+	hypo_analyze_reset();
 	PG_RETURN_VOID();
 }

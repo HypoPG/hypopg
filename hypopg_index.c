@@ -77,6 +77,7 @@
 #endif
 
 #include "include/hypopg.h"
+#include "include/hypopg_analyze.h"
 #include "include/hypopg_index.h"
 
 #if PG_VERSION_NUM >= 90600
@@ -2885,13 +2886,23 @@ hypo_estimate_index_colsize(hypoIndex * entry, int col)
 	/* If simple attribute, return avg width */
 	if (entry->indexkeys[col] != 0)
 	{
+		int			attwidth;
+		HypoAnalyzeStats stats;
+
 		i = hypo_gist_compressed_keysize(entry, col);
 		if (i > 0)
 			return i;
 
+		attwidth = get_attavgwidth(entry->relid, entry->indexkeys[col]);
+		if (entry->relam != BTREE_AM_OID && attwidth <= 0 &&
+			hypo_analyze_attribute(entry->relid, entry->indexkeys[col],
+									 HYPO_ANALYZE_DEFAULT_FRACTION, &stats))
+			return hypo_gist_index_colsize(entry,
+				get_atttype(entry->relid, entry->indexkeys[col]), stats.width);
+
 		return hypo_gist_index_colsize(entry,
 			get_atttype(entry->relid, entry->indexkeys[col]),
-			get_attavgwidth(entry->relid, entry->indexkeys[col]));
+			attwidth);
 	}
 
 	/* It's an expression */
@@ -2945,6 +2956,14 @@ hypo_estimate_index_colsize(hypoIndex * entry, int col)
 				/* default fallback estimate will be used */
 				break;
 		}
+	}
+
+	{
+		HypoAnalyzeStats stats;
+
+		if (hypo_analyze_expression(entry->relid, expr,
+								 HYPO_ANALYZE_DEFAULT_FRACTION, &stats))
+			return hypo_gist_index_colsize(entry, exprType(expr), stats.width);
 	}
 
 	/* Use the expression result type before falling back to a gross width. */
