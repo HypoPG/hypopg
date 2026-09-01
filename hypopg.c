@@ -526,7 +526,11 @@ hypo_build_simple_rel_hook(PlannerInfo *root,
 	bool	inhparent = rte->inh;
 #endif
 
-	if (isExplain && hypo_is_enabled)
+	if (isExplain && hypo_is_enabled
+#if PG_VERSION_NUM >= 190000
+		&& rte->rtekind == RTE_RELATION
+#endif
+		)
 	{
 		Relation	relation;
 

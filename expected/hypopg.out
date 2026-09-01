@@ -17,6 +17,13 @@ INSERT INTO hypo SELECT i, 'line ' || i
 FROM generate_series(1,100000) f(i);
 ANALYZE hypo;
 -- TESTS
+-- Should handle simple relations that aren't backed by RTE_RELATION
+SELECT COUNT(*) FROM do_explain('SELECT 1');
+ count 
+-------
+     1
+(1 row)
+
 SELECT COUNT(*) AS nb
 FROM public.hypopg_create_index('SELECT 1;CREATE INDEX ON hypo(id); SELECT 2');
 WARNING:  hypopg: SQL order #1 is not a CREATE INDEX statement

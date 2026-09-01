@@ -22,6 +22,9 @@ FROM generate_series(1,100000) f(i);
 ANALYZE hypo;
 
 -- TESTS
+-- Should handle simple relations that aren't backed by RTE_RELATION
+SELECT COUNT(*) FROM do_explain('SELECT 1');
+
 SELECT COUNT(*) AS nb
 FROM public.hypopg_create_index('SELECT 1;CREATE INDEX ON hypo(id); SELECT 2');
 
