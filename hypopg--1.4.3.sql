@@ -18,6 +18,11 @@ CREATE FUNCTION hypopg_reset()
     LANGUAGE C VOLATILE COST 100
 AS '$libdir/hypopg', 'hypopg_reset';
 
+CREATE FUNCTION hypopg_analyze(IN relation regclass, IN fraction real DEFAULT 1.0)
+    RETURNS void
+    LANGUAGE C VOLATILE COST 100
+AS '$libdir/hypopg', 'hypopg_analyze';
+
 CREATE FUNCTION
 hypopg_create_index(IN sql_order text, OUT indexrelid oid, OUT indexname text)
     RETURNS SETOF record

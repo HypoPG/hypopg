@@ -1,6 +1,13 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+  **New features**:
+
+  - Add support for GiST index costing.
+
 2026-06-20 version 1.4.3:
 -------------------------
 

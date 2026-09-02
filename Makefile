@@ -3,7 +3,7 @@ EXTVERSION   = $(shell grep default_version $(EXTENSION).control | sed -e "s/def
 TESTS        = $(wildcard test/sql/*.sql)
 
 # More test can be added later, after including pgxs
-REGRESS      = hypopg
+REGRESS      = hypopg hypo_analyze
 
 REGRESS_OPTS = --inputdir=test
 
@@ -12,6 +12,7 @@ PG_CONFIG ?= pg_config
 MODULE_big = hypopg
 
 OBJS = hypopg.o \
+       hypopg_analyze.o \
        hypopg_index.o \
        import/hypopg_import.o \
        import/hypopg_import_index.o

@@ -90,6 +90,25 @@ The following access methods are supported:
 - brin
 - hash (requires PostgreSQL 10 or above)
 - bloom (requires the bloom extension to be installed)
+- gist
+
+GiST indexes
+------------
+
+HypoPG supports hypothetical GiST indexes. Use the same **CREATE INDEX**
+statement as for a real index, including an operator class, its options, and
+``INCLUDE`` columns:
+
+.. code-block:: psql
+
+  SELECT * FROM hypopg_create_index(
+    'CREATE INDEX ON reservations USING gist (during)'
+  );
+
+GiST index size depends on the operator class, its options, and the data
+distribution. HypoPG estimates it from relation statistics and the selected
+operator class; use the estimate to compare candidates, and validate unusual
+data distributions with a representative physical index.
 
 Create a hypothetical index
 ---------------------------
