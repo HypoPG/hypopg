@@ -524,6 +524,11 @@ hypo_build_simple_rel_hook(PlannerInfo *root,
 {
 	Oid		relationObjectId = rte->relid;
 	bool	inhparent = rte->inh;
+
+	/* Bail out if the rel isn't an ordinary relation. */
+	if (rte->rtekind != RTE_RELATION)
+		goto bsr_prev_hook;
+
 #endif
 
 	if (isExplain && hypo_is_enabled)
@@ -568,6 +573,9 @@ hypo_build_simple_rel_hook(PlannerInfo *root,
 	if (prev_get_relation_info_hook)
 		prev_get_relation_info_hook(root, relationObjectId, inhparent, rel);
 #else
+
+bsr_prev_hook:
+
 	if (prev_build_simple_rel_hook)
 		prev_build_simple_rel_hook(root, rel, rte);
 #endif
