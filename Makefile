@@ -3,7 +3,7 @@ EXTVERSION   = $(shell grep default_version $(EXTENSION).control | sed -e "s/def
 TESTS        = $(wildcard test/sql/*.sql)
 
 # More test can be added later, after including pgxs
-REGRESS      = hypopg
+REGRESS      = hypopg hypopg_extra
 
 REGRESS_OPTS = --inputdir=test
 
