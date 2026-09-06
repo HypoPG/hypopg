@@ -432,7 +432,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 	ninccolumns = 0;
 #endif
 
-	if (nkeycolumns > INDEX_MAX_KEYS)
+	if (nkeycolumns + ninccolumns > INDEX_MAX_KEYS)
 		elog(ERROR, "hypopg: cannot use more thant %d columns in an index",
 			 INDEX_MAX_KEYS);
 
