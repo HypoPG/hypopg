@@ -1,6 +1,17 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+  **New features**:
+
+  - Add support for hypothetical GIN indexes.  On PostgreSQL 9.5 and later,
+    index size is estimated by passing a bounded table sample through the
+    selected operator class's ``extractValue`` support function.  PostgreSQL
+    9.2 through 9.4, and runtime sampling failures, use a catalog-statistics
+    fallback; costs are therefore approximate.
+
 2026-06-20 version 1.4.3:
 -------------------------
 

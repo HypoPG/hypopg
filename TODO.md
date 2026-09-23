@@ -7,7 +7,7 @@ Important
 - [X] Choose a better naming convention, including the index oid
 - [X] handle multiple columns
 - [X] handle collation
-- [ ] handle GIN access method
+- [X] handle GIN access method
 - [ ] handle GiST access method
 - [ ] handle SP-GiST access method
 - [X] handle BRIN access method

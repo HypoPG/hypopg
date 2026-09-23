@@ -27,6 +27,7 @@
 #include "access/brin_page.h"
 #include "access/brin_tuple.h"
 #endif
+#include "access/gin.h"
 #include "access/gist.h"
 #if PG_VERSION_NUM >= 90300
 #include "access/htup_details.h"
@@ -36,14 +37,18 @@
 #include "access/spgist.h"
 #include "access/spgist_private.h"
 #include "access/sysattr.h"
+#include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_amproc.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_statistic.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
+#include "executor/spi.h"
 #if PG_VERSION_NUM >= 120000
 #include "nodes/makefuncs.h"
 #endif
@@ -62,12 +67,16 @@
 #endif
 #include "storage/bufmgr.h"
 #include "utils/builtins.h"
+#include "utils/datum.h"
+#include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/resowner.h"
 #if PG_VERSION_NUM >= 90500
 #include "utils/ruleutils.h"
 #endif
 #include "utils/syscache.h"
+#include "utils/typcache.h"
 #if PG_VERSION_NUM >= 190000
 #include "utils/tuplestore.h"
 #endif
@@ -83,6 +92,38 @@ static Oid	BLOOM_AM_OID = InvalidOid;
 #if PG_VERSION_NUM < 180000
 #define CompareType int16
 #define COMPARE_LT BTLessStrategyNumber
+#endif
+
+#define HYPO_GIN_SAMPLE_ROWS		1024
+#define HYPO_GIN_MAX_SAMPLE_KEYS	100000
+
+#if PG_VERSION_NUM >= 90500
+typedef enum HypoGinKeyCategory
+{
+	HYPO_GIN_KEY_NORMAL,
+	HYPO_GIN_KEY_NULL,
+	HYPO_GIN_ITEM_NULL,
+	HYPO_GIN_ITEM_EMPTY
+} HypoGinKeyCategory;
+
+typedef struct HypoGinSampleKey
+{
+	Datum		value;
+	HypoGinKeyCategory category;
+} HypoGinSampleKey;
+
+typedef struct HypoGinSampleColumn
+{
+	FmgrInfo	extractFn;
+	FmgrInfo	compareFn;
+	Oid			collation;
+	Oid			keytype;
+	int16		typlen;
+	bool		typbyval;
+	HypoGinSampleKey *keys;
+	int			nkeys;
+	int			capacity;
+} HypoGinSampleColumn;
 #endif
 
 /*--- Variables exported ---*/
@@ -112,6 +153,13 @@ static void hypo_estimate_index_simple(hypoIndex * entry,
 									   BlockNumber *pages, double *tuples);
 static void hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel);
 static int	hypo_estimate_index_colsize(hypoIndex * entry, int col);
+static bool hypo_gin_sample(hypoIndex * entry);
+static double hypo_gin_keys_per_tuple(hypoIndex * entry, int col);
+#if PG_VERSION_NUM >= 90500
+static int hypo_gin_compare_keys(const void *a, const void *b, void *arg);
+static char *hypo_gin_sample_target(hypoIndex * entry, int col,
+								   List *context);
+#endif
 static void hypo_index_pfree(hypoIndex * entry);
 static bool hypo_index_remove(Oid indexid);
 static bool hypo_index_unhide(Oid indexid);
@@ -262,6 +310,7 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 		 * (and was previously done) here.
 		 */
 		if (entry->relam != BTREE_AM_OID
+			&& entry->relam != GIN_AM_OID
 #if PG_VERSION_NUM >= 90500
 			&& entry->relam != BRIN_AM_OID
 #endif
@@ -1034,6 +1083,14 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 	index->indexcollations = (Oid *) palloc(sizeof(int) * nkeycolumns);
 	index->opfamily = (Oid *) palloc(sizeof(int) * nkeycolumns);
 	index->opcintype = (Oid *) palloc(sizeof(int) * nkeycolumns);
+#if PG_VERSION_NUM >= 130000
+	/*
+	 * gincostestimate calls extractQuery with per-column opclass options.
+	 * Default opclasses have none; allocate a NULL array so the pointer is
+	 * safe to index.
+	 */
+	index->opclassoptions = (bytea **) palloc0(sizeof(bytea *) * nkeycolumns);
+#endif
 
 	if ((index->relam == BTREE_AM_OID) || entry->amcanorder)
 	{
@@ -2000,6 +2057,69 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 		entry->tree_height = -1;	/* TODO */
 #endif
 	}
+	else if (entry->relam == GIN_AM_OID)
+	{
+		double		posting_items = 0;
+		double		data_pages;
+		double		entry_pages;
+		double		entry_tuple_size;
+		double		unique_entries;
+		int			col;
+		int			key_width = 0;
+
+		/*
+		 * GIN stores extracted keys plus compressed posting lists, not one
+		 * tuple per heap row.  Sample values and pass them through each
+		 * opclass's extractValue support function, just as a real GIN build
+		 * does.  Catalog statistics are only a fallback when sampling is not
+		 * available.
+		 */
+		if (hypo_gin_sample(entry))
+		{
+			posting_items = entry->tuples * entry->gin_keys_per_tuple;
+			key_width = Max(1, (int) ceil(entry->gin_avg_key_width));
+			unique_entries = posting_items * entry->gin_unique_ratio;
+		}
+		else
+		{
+			for (col = 0; col < entry->nkeycolumns; col++)
+				posting_items += entry->tuples *
+					hypo_gin_keys_per_tuple(entry, col);
+
+			for (col = 0; col < entry->nkeycolumns; col++)
+				key_width += Max(16,
+								hypo_estimate_index_colsize(entry, col));
+
+			/* Conservatively assume all extracted fallback keys are unique. */
+			unique_entries = posting_items;
+		}
+
+		if (posting_items < 1.0)
+			posting_items = 1.0;
+		if (unique_entries < 1.0)
+			unique_entries = 1.0;
+
+		usable_page_size = BLCKSZ - SizeOfPageHeaderData
+			- 8;				/* GinPageOpaqueData is 8 bytes */
+		if (usable_page_size <= 0)
+			usable_page_size = BLCKSZ / 2;
+
+		/* Same 3-byte average item pointer as gincostestimate(). */
+		data_pages = posting_items * 3.0 / usable_page_size;
+
+		entry_tuple_size = key_width + MAXALIGN(sizeof(IndexTupleData))
+			+ sizeof(ItemIdData);
+		if (entry->nkeycolumns > 1)
+			entry_tuple_size += sizeof(int16);
+		entry_pages = unique_entries * entry_tuple_size / usable_page_size;
+
+		entry->pages = (BlockNumber) ceil((data_pages + entry_pages) *
+										  ((100.0 + additional_bloat) / 100.0))
+			+ 1;				/* metapage */
+#if PG_VERSION_NUM >= 90300
+		entry->tree_height = -1;
+#endif
+	}
 #if PG_VERSION_NUM >= 90500
 	else if (entry->relam == BRIN_AM_OID)
 	{
@@ -2195,6 +2315,612 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 	/* make sure the index size is at least one block */
 	if (entry->pages <= 0)
 		entry->pages = 1;
+}
+
+#if PG_VERSION_NUM >= 90500
+static int
+hypo_gin_compare_keys(const void *a, const void *b, void *arg)
+{
+	const HypoGinSampleKey *ka = (const HypoGinSampleKey *) a;
+	const HypoGinSampleKey *kb = (const HypoGinSampleKey *) b;
+	HypoGinSampleColumn *column = (HypoGinSampleColumn *) arg;
+
+	if (ka->category != kb->category)
+		return ka->category < kb->category ? -1 : 1;
+	if (ka->category != HYPO_GIN_KEY_NORMAL)
+		return 0;
+
+	return DatumGetInt32(FunctionCall2Coll(&column->compareFn,
+										   column->collation,
+										   ka->value, kb->value));
+}
+
+static char *
+hypo_gin_sample_target(hypoIndex * entry, int col, List *context)
+{
+	if (entry->indexkeys[col] != 0)
+	{
+		char	   *attname;
+
+#if PG_VERSION_NUM >= 110000
+		attname = get_attname(entry->relid, entry->indexkeys[col], false);
+#else
+		attname = get_attname(entry->relid, entry->indexkeys[col]);
+#endif
+		return pstrdup(quote_identifier(attname));
+	}
+	else
+	{
+		int			i;
+		int			pos = 0;
+		Node	   *expr;
+
+		for (i = 0; i < col; i++)
+			if (entry->indexkeys[i] == 0)
+				pos++;
+
+		expr = (Node *) list_nth(entry->indexprs, pos);
+		return deparse_expression(expr, context, true, false);
+	}
+}
+#endif
+
+/*
+ * Sample indexed values and pass them through GIN_EXTRACTVALUE_PROC.
+ *
+ * This follows the abandoned hypothetical-analyze implementation on master:
+ * execute a bounded TABLESAMPLE as the relation owner under a restricted
+ * search path.  Unlike that implementation, feed each sampled Datum through
+ * the selected operator class instead of deriving ordinary column statistics.
+ */
+static bool
+hypo_gin_sample(hypoIndex * entry)
+{
+#if PG_VERSION_NUM >= 90500
+	Relation	relation;
+	List	   *context;
+	StringInfoData query;
+	int			col;
+	int			ret;
+	double		fraction;
+	HypoGinSampleColumn *columns;
+	MemoryContext caller_context = CurrentMemoryContext;
+	MemoryContext sample_context;
+	MemoryContext row_context;
+	MemoryContext oldcontext;
+	Oid			save_userid;
+	int			save_sec_context;
+	int			save_nestlevel;
+	bool		save_enabled = hypo_is_enabled;
+	bool		save_is_explain = isExplain;
+	volatile bool setup_failed = false;
+	volatile bool sampling_failed = false;
+	ResourceOwner oldowner;
+	uint64		sample_rows = 0;
+	uint64		posting_items = 0;
+	uint64		total_stored_keys = 0;
+	uint64		unique_keys = 0;
+	double		unique_key_bytes = 0;
+#endif
+
+	if (entry->gin_sampled)
+		return entry->gin_sample_valid;
+
+	entry->gin_sampled = true;
+	entry->gin_sample_valid = false;
+
+#if PG_VERSION_NUM < 90500
+	/* TABLESAMPLE was introduced in PostgreSQL 9.5. */
+	return false;
+#else
+	relation = table_open(entry->relid, AccessShareLock);
+	context = deparse_context_for(RelationGetRelationName(relation),
+								  entry->relid);
+
+	initStringInfo(&query);
+	appendStringInfoString(&query, "SELECT ");
+	for (col = 0; col < entry->nkeycolumns; col++)
+	{
+		char	   *target = hypo_gin_sample_target(entry, col, context);
+
+		if (col > 0)
+			appendStringInfoString(&query, ", ");
+		appendStringInfo(&query, "%s", target);
+		pfree(target);
+	}
+
+	/*
+	 * Aim for the bounded row count but use 100% for small or poorly
+	 * estimated relations.  REPEATABLE keeps repeated sessions stable.
+	 */
+	if (entry->tuples > HYPO_GIN_SAMPLE_ROWS)
+		fraction = Min(100.0,
+					   HYPO_GIN_SAMPLE_ROWS * 100.0 / entry->tuples);
+	else
+		fraction = 100.0;
+
+	appendStringInfo(&query,
+					 " FROM %s.%s TABLESAMPLE SYSTEM (%.10g)"
+					 " REPEATABLE (0)",
+					 quote_identifier(get_namespace_name(
+										 RelationGetNamespace(relation))),
+					 quote_identifier(RelationGetRelationName(relation)),
+					 fraction);
+
+	if (entry->indpred != NIL)
+	{
+		char	   *predicate;
+
+		predicate = deparse_expression((Node *)
+									  make_ands_explicit(entry->indpred),
+									  context, true, false);
+		appendStringInfo(&query, " WHERE %s", predicate);
+		pfree(predicate);
+	}
+	appendStringInfo(&query, " LIMIT %d", HYPO_GIN_SAMPLE_ROWS);
+
+	sample_context = AllocSetContextCreate(caller_context,
+										  "HypoPG GIN sample",
+#if PG_VERSION_NUM >= 90600
+										  ALLOCSET_DEFAULT_SIZES);
+#else
+										  ALLOCSET_DEFAULT_MINSIZE,
+										  ALLOCSET_DEFAULT_INITSIZE,
+										  ALLOCSET_DEFAULT_MAXSIZE);
+#endif
+	row_context = AllocSetContextCreate(sample_context,
+									   "HypoPG GIN sample row",
+#if PG_VERSION_NUM >= 90600
+									   ALLOCSET_DEFAULT_SIZES);
+#else
+									   ALLOCSET_DEFAULT_MINSIZE,
+									   ALLOCSET_DEFAULT_INITSIZE,
+									   ALLOCSET_DEFAULT_MAXSIZE);
+#endif
+	oldcontext = MemoryContextSwitchTo(sample_context);
+	columns = palloc0(sizeof(HypoGinSampleColumn) * entry->nkeycolumns);
+
+	PG_TRY();
+	{
+		for (col = 0; col < entry->nkeycolumns; col++)
+		{
+			HeapTuple	opclass_tuple;
+			Form_pg_opclass opclass;
+			Oid			proc;
+			Oid			input_type;
+			TypeCacheEntry *typentry;
+
+			proc = get_opfamily_proc(entry->opfamily[col],
+									entry->opcintype[col],
+									entry->opcintype[col],
+									GIN_EXTRACTVALUE_PROC);
+			if (!OidIsValid(proc))
+				elog(ERROR, "missing GIN extractValue support function for operator class %u",
+					 entry->opclass[col]);
+			fmgr_info(proc, &columns[col].extractFn);
+
+			opclass_tuple = SearchSysCache1(CLAOID,
+										   ObjectIdGetDatum(entry->opclass[col]));
+			if (!HeapTupleIsValid(opclass_tuple))
+				elog(ERROR, "cache lookup failed for operator class %u",
+					 entry->opclass[col]);
+			opclass = (Form_pg_opclass) GETSTRUCT(opclass_tuple);
+			columns[col].keytype = OidIsValid(opclass->opckeytype) ?
+				opclass->opckeytype : opclass->opcintype;
+
+			if (entry->indexkeys[col] != 0)
+				input_type = get_atttype(entry->relid,
+										 entry->indexkeys[col]);
+			else
+			{
+				int			i;
+				int			pos = 0;
+
+				for (i = 0; i < col; i++)
+					if (entry->indexkeys[i] == 0)
+						pos++;
+				input_type = exprType((Node *)
+									  list_nth(entry->indexprs, pos));
+			}
+
+			/*
+			 * construct_index_tupdesc() resolves the polymorphic array GIN
+			 * key type the same way for a real index.
+			 */
+			if (columns[col].keytype == ANYELEMENTOID &&
+				opclass->opcintype == ANYARRAYOID)
+			{
+				columns[col].keytype = get_base_element_type(input_type);
+				if (!OidIsValid(columns[col].keytype))
+					elog(ERROR, "could not get element type of array type %u",
+						 input_type);
+			}
+			ReleaseSysCache(opclass_tuple);
+
+			proc = get_opfamily_proc(entry->opfamily[col],
+									entry->opcintype[col],
+									entry->opcintype[col],
+									GIN_COMPARE_PROC);
+			if (OidIsValid(proc))
+				fmgr_info(proc, &columns[col].compareFn);
+			else
+			{
+				typentry = lookup_type_cache(columns[col].keytype,
+											TYPECACHE_CMP_PROC_FINFO);
+				if (!OidIsValid(typentry->cmp_proc_finfo.fn_oid))
+					elog(ERROR, "could not identify a comparison function for type %s",
+						 format_type_be(columns[col].keytype));
+				fmgr_info(typentry->cmp_proc_finfo.fn_oid,
+						  &columns[col].compareFn);
+			}
+
+			columns[col].collation =
+				OidIsValid(entry->indexcollations[col]) ?
+				entry->indexcollations[col] : DEFAULT_COLLATION_OID;
+			get_typlenbyval(columns[col].keytype,
+							&columns[col].typlen,
+							&columns[col].typbyval);
+		}
+	}
+	PG_CATCH();
+	{
+		ErrorData  *edata;
+
+		MemoryContextSwitchTo(caller_context);
+		edata = CopyErrorData();
+		FlushErrorState();
+		elog(DEBUG1, "hypopg: GIN sampling setup unavailable: %s",
+			 edata->message);
+		FreeErrorData(edata);
+		setup_failed = true;
+	}
+	PG_END_TRY();
+	if (setup_failed)
+	{
+		table_close(relation, AccessShareLock);
+		MemoryContextDelete(sample_context);
+		pfree(query.data);
+		return false;
+	}
+	MemoryContextSwitchTo(oldcontext);
+
+	GetUserIdAndSecContext(&save_userid, &save_sec_context);
+	save_nestlevel = NewGUCNestLevel();
+	oldowner = CurrentResourceOwner;
+	BeginInternalSubTransaction(NULL);
+
+	PG_TRY();
+	{
+		uint64		row;
+
+		SetUserIdAndSecContext(relation->rd_rel->relowner,
+							   save_sec_context |
+							   SECURITY_RESTRICTED_OPERATION);
+		set_config_option("search_path", "pg_catalog, pg_temp",
+						  PGC_USERSET, PGC_S_SESSION,
+						  GUC_ACTION_SAVE, true, 0, false);
+		hypo_is_enabled = false;
+
+		ret = SPI_connect();
+		if (ret != SPI_OK_CONNECT)
+			elog(ERROR, "hypopg: SPI connect failed while sampling GIN values");
+
+		ret = SPI_execute(query.data, true, HYPO_GIN_SAMPLE_ROWS);
+		if (ret != SPI_OK_SELECT || SPI_tuptable == NULL)
+			elog(ERROR, "hypopg: TABLESAMPLE failed while estimating GIN index");
+
+		for (row = 0; row < SPI_processed; row++)
+		{
+			bool		row_complete = true;
+			uint64		row_postings = 0;
+
+			CHECK_FOR_INTERRUPTS();
+			MemoryContextReset(row_context);
+
+			for (col = 0; col < entry->nkeycolumns; col++)
+			{
+				bool		isnull;
+				Datum		value;
+				Datum	   *entries = NULL;
+				bool	   *null_flags = NULL;
+				int32		nentries = 0;
+				int			i;
+				int			row_unique = 0;
+				HypoGinSampleKey *row_keys;
+
+				value = SPI_getbinval(SPI_tuptable->vals[row],
+									  SPI_tuptable->tupdesc,
+									  col + 1, &isnull);
+
+				MemoryContextSwitchTo(row_context);
+				if (isnull)
+				{
+					nentries = 1;
+					row_keys = palloc(sizeof(HypoGinSampleKey));
+					row_keys[0].value = (Datum) 0;
+					row_keys[0].category = HYPO_GIN_ITEM_NULL;
+				}
+				else
+				{
+					entries = (Datum *) DatumGetPointer(
+						FunctionCall3Coll(&columns[col].extractFn,
+										  columns[col].collation,
+										  value,
+										  PointerGetDatum(&nentries),
+										  PointerGetDatum(&null_flags)));
+
+					if (entries == NULL || nentries <= 0)
+					{
+						nentries = 1;
+						row_keys = palloc(sizeof(HypoGinSampleKey));
+						row_keys[0].value = (Datum) 0;
+						row_keys[0].category = HYPO_GIN_ITEM_EMPTY;
+					}
+					else
+					{
+						row_keys = palloc(sizeof(HypoGinSampleKey) *
+										 nentries);
+						for (i = 0; i < nentries; i++)
+						{
+							row_keys[i].value = entries[i];
+							row_keys[i].category =
+								(null_flags != NULL && null_flags[i]) ?
+								HYPO_GIN_KEY_NULL : HYPO_GIN_KEY_NORMAL;
+						}
+						if (nentries > 1)
+							qsort_arg(row_keys, nentries,
+									  sizeof(HypoGinSampleKey),
+									  hypo_gin_compare_keys,
+									  &columns[col]);
+					}
+				}
+
+				for (i = 0; i < nentries; i++)
+				{
+					if (i == 0 ||
+						hypo_gin_compare_keys(&row_keys[i - 1],
+											  &row_keys[i],
+											  &columns[col]) != 0)
+						row_unique++;
+				}
+
+				if (total_stored_keys + row_postings + row_unique >
+					HYPO_GIN_MAX_SAMPLE_KEYS)
+				{
+					row_complete = false;
+					MemoryContextSwitchTo(sample_context);
+					break;
+				}
+
+				if (columns[col].nkeys + row_unique >
+					columns[col].capacity)
+				{
+					int			new_capacity;
+
+					new_capacity = Max(columns[col].capacity * 2,
+									   columns[col].nkeys + row_unique);
+					new_capacity = Min(new_capacity,
+									   HYPO_GIN_MAX_SAMPLE_KEYS);
+					MemoryContextSwitchTo(sample_context);
+					if (columns[col].keys == NULL)
+						columns[col].keys =
+							palloc(sizeof(HypoGinSampleKey) * new_capacity);
+					else
+						columns[col].keys =
+							repalloc(columns[col].keys,
+									 sizeof(HypoGinSampleKey) * new_capacity);
+					columns[col].capacity = new_capacity;
+					MemoryContextSwitchTo(row_context);
+				}
+
+				for (i = 0; i < nentries; i++)
+				{
+					HypoGinSampleKey *dst;
+
+					if (i > 0 &&
+						hypo_gin_compare_keys(&row_keys[i - 1],
+											  &row_keys[i],
+											  &columns[col]) == 0)
+						continue;
+
+					MemoryContextSwitchTo(sample_context);
+					dst = &columns[col].keys[columns[col].nkeys++];
+					dst->category = row_keys[i].category;
+					dst->value = row_keys[i].category == HYPO_GIN_KEY_NORMAL ?
+						datumCopy(row_keys[i].value,
+								  columns[col].typbyval,
+								  columns[col].typlen) : (Datum) 0;
+					MemoryContextSwitchTo(row_context);
+				}
+
+				row_postings += row_unique;
+				MemoryContextSwitchTo(sample_context);
+			}
+
+			if (!row_complete)
+				break;
+
+			posting_items += row_postings;
+			total_stored_keys += row_postings;
+			sample_rows++;
+			MemoryContextSwitchTo(sample_context);
+		}
+
+		SPI_finish();
+		ReleaseCurrentSubTransaction();
+		MemoryContextSwitchTo(caller_context);
+		CurrentResourceOwner = oldowner;
+	}
+	PG_CATCH();
+	{
+		ErrorData  *edata;
+
+		MemoryContextSwitchTo(caller_context);
+		edata = CopyErrorData();
+		FlushErrorState();
+		RollbackAndReleaseCurrentSubTransaction();
+		MemoryContextSwitchTo(caller_context);
+		CurrentResourceOwner = oldowner;
+		AtEOXact_GUC(false, save_nestlevel);
+		SetUserIdAndSecContext(save_userid, save_sec_context);
+		hypo_is_enabled = save_enabled;
+		isExplain = save_is_explain;
+
+		elog(DEBUG1, "hypopg: GIN sampling unavailable: %s",
+			 edata->message);
+		FreeErrorData(edata);
+		sampling_failed = true;
+	}
+	PG_END_TRY();
+	if (sampling_failed)
+	{
+		table_close(relation, AccessShareLock);
+		MemoryContextDelete(sample_context);
+		pfree(query.data);
+		return false;
+	}
+
+	AtEOXact_GUC(false, save_nestlevel);
+	SetUserIdAndSecContext(save_userid, save_sec_context);
+	hypo_is_enabled = save_enabled;
+	isExplain = save_is_explain;
+
+	MemoryContextSwitchTo(sample_context);
+	for (col = 0; col < entry->nkeycolumns; col++)
+	{
+		int			i;
+
+		if (columns[col].nkeys > 1)
+			qsort_arg(columns[col].keys, columns[col].nkeys,
+					  sizeof(HypoGinSampleKey),
+					  hypo_gin_compare_keys, &columns[col]);
+
+		for (i = 0; i < columns[col].nkeys; i++)
+		{
+			if (i > 0 &&
+				hypo_gin_compare_keys(&columns[col].keys[i - 1],
+									  &columns[col].keys[i],
+									  &columns[col]) == 0)
+				continue;
+
+			unique_keys++;
+			if (columns[col].keys[i].category == HYPO_GIN_KEY_NORMAL)
+				unique_key_bytes += datumGetSize(
+					columns[col].keys[i].value,
+					columns[col].typbyval,
+					columns[col].typlen);
+		}
+	}
+	MemoryContextSwitchTo(caller_context);
+
+	if (sample_rows > 0 && posting_items > 0 && unique_keys > 0)
+	{
+		entry->gin_keys_per_tuple =
+			(double) posting_items / sample_rows;
+		entry->gin_unique_ratio =
+			(double) unique_keys / posting_items;
+		entry->gin_avg_key_width =
+			Max(1.0, unique_key_bytes / unique_keys);
+		entry->gin_sample_valid = true;
+	}
+
+	table_close(relation, AccessShareLock);
+	MemoryContextDelete(sample_context);
+	pfree(query.data);
+
+	return entry->gin_sample_valid;
+#endif
+}
+
+/*
+ * Average GIN keys extracted per heap tuple for one index column.
+ *
+ * Arrays and tsvector store a distinct-elements histogram (DECHIST); the last
+ * number is the average count per non-null row.  jsonb and other types do not,
+ * so fall back to a conservative width-based guess.
+ */
+static double
+hypo_gin_keys_per_tuple(hypoIndex * entry, int col)
+{
+	double		avg_keys = 0;
+	float4		nullfrac = 0;
+	bool		found = false;
+
+	if (entry->indexkeys[col] > 0)
+	{
+		HeapTuple	statsTuple;
+
+		statsTuple = SearchSysCache3(STATRELATTINH,
+									 ObjectIdGetDatum(entry->relid),
+									 Int16GetDatum(entry->indexkeys[col]),
+									 BoolGetDatum(false));
+		if (HeapTupleIsValid(statsTuple))
+		{
+			Form_pg_statistic stats = (Form_pg_statistic) GETSTRUCT(statsTuple);
+
+			nullfrac = stats->stanullfrac;
+
+#if PG_VERSION_NUM >= 100000
+			{
+				AttStatsSlot sslot;
+
+				memset(&sslot, 0, sizeof(sslot));
+				if (get_attstatsslot(&sslot, statsTuple,
+									 STATISTIC_KIND_DECHIST,
+									 InvalidOid,
+									 ATTSTATSSLOT_NUMBERS) &&
+					sslot.nnumbers > 0)
+				{
+					avg_keys = sslot.numbers[sslot.nnumbers - 1];
+					found = true;
+				}
+				free_attstatsslot(&sslot);
+			}
+#else
+			{
+				float4	   *numbers = NULL;
+				int			nnumbers = 0;
+
+				if (get_attstatsslot(statsTuple,
+									 InvalidOid,
+									 -1,
+									 STATISTIC_KIND_DECHIST,
+									 InvalidOid,
+									 NULL,
+									 NULL,
+									 NULL,
+									 &numbers, &nnumbers) &&
+					nnumbers > 0)
+				{
+					avg_keys = numbers[nnumbers - 1];
+					found = true;
+				}
+				free_attstatsslot(InvalidOid, NULL, 0, numbers, nnumbers);
+			}
+#endif
+			ReleaseSysCache(statsTuple);
+		}
+	}
+
+	if (!found)
+	{
+		int			width = hypo_estimate_index_colsize(entry, col);
+
+		if (width <= 0)
+			avg_keys = 8.0;
+		else
+			avg_keys = Max(2.0, (double) width / 8.0);
+	}
+
+	if (nullfrac > 0.0 && nullfrac < 1.0)
+		avg_keys *= (1.0 - nullfrac);
+	else if (nullfrac >= 1.0)
+		avg_keys = 1.0;
+
+	if (avg_keys < 1.0)
+		avg_keys = 1.0;
+
+	return avg_keys;
 }
 
 /*
