@@ -21,7 +21,14 @@
 #include "optimizer/plancat.h"
 #include "tcop/utility.h"
 
-#define HYPO_INDEX_NB_COLS		12	/* # of column hypopg() returns */
+/*
+ * Number of output arguments (columns) for various API versions of hypopg()
+ * set-returning function.
+ */
+#define HYPO_INDEX_NB_COLS_V100	12
+#define HYPO_INDEX_NB_COLS_V144	13
+#define HYPO_INDEX_NB_COLS		13
+
 #define HYPO_INDEX_CREATE_COLS	2	/* # of column hypopg_create_index()
 									 * returns */
 #define HYPO_HIDDEN_INDEX_COLS	1	/* # of column hypopg_hidden_indexes()
@@ -48,6 +55,7 @@ typedef struct hypoIndex
 	Oid			relid;			/* related relation Oid */
 	Oid			reltablespace;	/* tablespace of the index, if set */
 	char	   *indexname;		/* hypothetical index name */
+	bool		invalidated;	/* was a cache invalidation received? */
 
 	BlockNumber pages;			/* number of estimated disk pages for the
 								 * index */
@@ -141,5 +149,7 @@ void		hypo_injectHypotheticalIndex(PlannerInfo *root,
 										 Relation relation,
 										 hypoIndex * entry);
 void hypo_hideIndexes(RelOptInfo *rel);
+
+void HypoCacheRelCallback(Datum arg, Oid relid);
 
 #endif

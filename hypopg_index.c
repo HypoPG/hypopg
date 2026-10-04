@@ -75,6 +75,12 @@
 #include "include/hypopg.h"
 #include "include/hypopg_index.h"
 
+typedef enum hypoVersion
+{
+	HYPO_V100 = 0,
+	HYPO_V144
+} hypoVersion;
+
 #if PG_VERSION_NUM >= 90600
 /* this will be updated, when needed, by hypo_discover_am */
 static Oid	BLOOM_AM_OID = InvalidOid;
@@ -94,6 +100,7 @@ List	   *hypoHiddenIndexes;
 /*--- Functions --- */
 
 PG_FUNCTION_INFO_V1(hypopg);
+PG_FUNCTION_INFO_V1(hypopg_144);
 PG_FUNCTION_INFO_V1(hypopg_create_index);
 PG_FUNCTION_INFO_V1(hypopg_drop_index);
 PG_FUNCTION_INFO_V1(hypopg_relation_size);
@@ -121,6 +128,8 @@ static hypoIndex * hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns,
 								 int ninccolumns,
 								 List *options);
 static void hypo_set_indexname(hypoIndex * entry, char *indexname);
+
+static void hypopg_internal(FunctionCallInfo fcinfo, hypoVersion api_version);
 
 
 /*
@@ -168,6 +177,7 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 	entry = palloc0(sizeof(hypoIndex));
 
 	entry->relam = oid;
+	entry->invalidated = false;
 
 #if PG_VERSION_NUM >= 90600
 	/*
@@ -1199,11 +1209,26 @@ hypo_explain_get_index_name_hook(Oid indexId)
 	return NULL;
 }
 
+Datum
+hypopg(PG_FUNCTION_ARGS)
+{
+	hypopg_internal(fcinfo, HYPO_V100);
+
+	return (Datum) 0;
+}
+Datum
+hypopg_144(PG_FUNCTION_ARGS)
+{
+	hypopg_internal(fcinfo, HYPO_V144);
+
+	return (Datum) 0;
+}
+
 /*
  * List created hypothetical indexes
  */
-Datum
-hypopg(PG_FUNCTION_ARGS)
+static void
+hypopg_internal(FunctionCallInfo fcinfo, hypoVersion api_version)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	MemoryContext per_query_ctx;
@@ -1212,6 +1237,12 @@ hypopg(PG_FUNCTION_ARGS)
 	Tuplestorestate *tupstore;
 	ListCell   *lc;
 	Datum		predDatum;
+	int			max_col;
+
+	if (api_version == HYPO_V100)
+		max_col = HYPO_INDEX_NB_COLS_V100;
+	else
+		max_col = HYPO_INDEX_NB_COLS_V144;
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
@@ -1250,54 +1281,68 @@ hypopg(PG_FUNCTION_ARGS)
 		memset(values, 0, sizeof(values));
 		memset(nulls, 0, sizeof(nulls));
 
+		if (api_version >= HYPO_V144)
+			values[i++] = BoolGetDatum(entry->invalidated);
 
-		values[i++] = CStringGetTextDatum(entry->indexname);
-		values[i++] = ObjectIdGetDatum(entry->oid);
-		values[i++] = ObjectIdGetDatum(entry->relid);
-		values[i++] = Int32GetDatum(entry->ncolumns);
-		values[i++] = BoolGetDatum(entry->unique);
-		values[i++] = PointerGetDatum(buildint2vector(entry->indexkeys, entry->ncolumns));
-		values[i++] = PointerGetDatum(buildoidvector(entry->indexcollations, entry->ncolumns));
-		values[i++] = PointerGetDatum(buildoidvector(entry->opclass, entry->ncolumns));
-		nulls[i++] = true;		/* no indoption for now, TODO */
-
-		/* get each of indexprs, if any */
-		initStringInfo(&exprsString);
-		foreach(lc2, entry->indexprs)
+		if (entry->invalidated)
 		{
-			Node	   *expr = lfirst(lc2);
+			values[i++] = CStringGetTextDatum(entry->indexname);
+			values[i++] = ObjectIdGetDatum(entry->oid);
 
-			appendStringInfo(&exprsString, "%s", nodeToString(expr));
-		}
-		if (exprsString.len == 0)
-			nulls[i++] = true;
-		else
-			values[i++] = CStringGetTextDatum(exprsString.data);
-		pfree(exprsString.data);
-
-		/*
-		 * Convert the index predicate (if any) to a text datum.  Note we
-		 * convert implicit-AND format to normal explicit-AND for storage.
-		 */
-		if (entry->indpred != NIL)
-		{
-			char	   *predString;
-
-			predString = nodeToString(make_ands_explicit(entry->indpred));
-			predDatum = CStringGetTextDatum(predString);
-			pfree(predString);
-			values[i++] = predDatum;
+			while (i < max_col)
+				nulls[i++] = true;
 		}
 		else
-			nulls[i++] = true;
+		{
+			values[i++] = CStringGetTextDatum(entry->indexname);
+			values[i++] = ObjectIdGetDatum(entry->oid);
+			values[i++] = ObjectIdGetDatum(entry->relid);
+			values[i++] = Int32GetDatum(entry->ncolumns);
+			values[i++] = BoolGetDatum(entry->unique);
+			values[i++] = PointerGetDatum(buildint2vector(entry->indexkeys, entry->ncolumns));
+			values[i++] = PointerGetDatum(buildoidvector(entry->indexcollations, entry->ncolumns));
+			values[i++] = PointerGetDatum(buildoidvector(entry->opclass, entry->ncolumns));
+			nulls[i++] = true;		/* no indoption for now, TODO */
 
-		values[i++] = ObjectIdGetDatum(entry->relam);
-		Assert(i == HYPO_INDEX_NB_COLS);
+			/* get each of indexprs, if any */
+			initStringInfo(&exprsString);
+			foreach(lc2, entry->indexprs)
+			{
+				Node	   *expr = lfirst(lc2);
+
+				appendStringInfo(&exprsString, "%s", nodeToString(expr));
+			}
+			if (exprsString.len == 0)
+				nulls[i++] = true;
+			else
+				values[i++] = CStringGetTextDatum(exprsString.data);
+			pfree(exprsString.data);
+
+			/*
+			 * Convert the index predicate (if any) to a text datum.  Note we
+			 * convert implicit-AND format to normal explicit-AND for storage.
+			 */
+			if (entry->indpred != NIL)
+			{
+				char	   *predString;
+
+				predString = nodeToString(make_ands_explicit(entry->indpred));
+				predDatum = CStringGetTextDatum(predString);
+				pfree(predString);
+				values[i++] = predDatum;
+			}
+			else
+				nulls[i++] = true;
+
+			values[i++] = ObjectIdGetDatum(entry->relam);
+		}
+
+		Assert(i == (api_version == HYPO_V100 ? HYPO_INDEX_NB_COLS_V100 :
+					 api_version == HYPO_V144 ? HYPO_INDEX_NB_COLS_V144 :
+					 -1 /*  fail if you forget to update this assert */ ));
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
-
-	return (Datum) 0;
 }
 
 /*
@@ -1410,6 +1455,9 @@ hypopg_relation_size(PG_FUNCTION_ARGS)
 
 		if (entry->oid == indexid)
 		{
+			if (entry->invalidated)
+				PG_RETURN_NULL();
+
 			hypo_estimate_index_simple(entry, &pages, &tuples);
 			found = true;
 			break;
@@ -1452,6 +1500,13 @@ hypopg_get_indexdef(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	initStringInfo(&buf);
+
+	if (entry->invalidated)
+	{
+		appendStringInfo(&buf, "<invalidated>");
+		goto emit_ddl;
+	}
+
 	appendStringInfo(&buf, "CREATE %s ON %s.%s USING %s (",
 					 (entry->unique ? "UNIQUE INDEX" : "INDEX"),
 					 quote_identifier(get_namespace_name(get_rel_namespace(entry->relid))),
@@ -1589,6 +1644,8 @@ hypopg_get_indexdef(PG_FUNCTION_ARGS)
 		appendStringInfo(&buf, " WHERE %s", deparse_expression((Node *)
 															   make_ands_explicit(entry->indpred), context, false, false));
 	}
+
+emit_ddl:
 
 	PG_RETURN_TEXT_P(cstring_to_text(buf.data));
 }
@@ -2378,4 +2435,25 @@ hypo_discover_am(char *amname, Oid oid)
 	if (strcmp(amname, "bloom") == 0)
 		BLOOM_AM_OID = oid;
 #endif			/* pg9.6+ */
+}
+
+/*
+ * Invalidate all hypothetical indexes if they're on the given relation.
+ */
+void
+HypoCacheRelCallback(Datum arg, Oid relid)
+{
+	ListCell   *lc;
+
+	foreach(lc, hypoIndexes)
+	{
+		hypoIndex  *entry = (hypoIndex *) lfirst(lc);
+
+		/*
+		 * Note that InvalidOid is passed when the shared-inval-queue
+		 * overflows, in which case we need to invalidate every single entry.
+		 */
+		if (!OidIsValid(relid) || entry->relid == relid)
+			entry->invalidated = true;
+	}
 }

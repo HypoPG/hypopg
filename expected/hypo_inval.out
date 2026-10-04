@@ -1,0 +1,114 @@
+-- Test cache invalidation
+-- Remove all the hypothetical indexes if any
+SELECT hypopg_reset();
+ hypopg_reset 
+--------------
+ 
+(1 row)
+
+CREATE SCHEMA nsp_hypo;
+CREATE TABLE nsp_hypo.hypo2(id integer, val text);
+SELECT COUNT(*) AS NB
+FROM hypopg_create_index('CREATE INDEX ON hypo(id)');
+ nb 
+----
+  1
+(1 row)
+
+SELECT COUNT(*) AS NB
+FROM hypopg_create_index('CREATE INDEX ON nsp_hypo.hypo2(id)');
+ nb 
+----
+  1
+(1 row)
+
+-- hypothetical index should be usable
+SELECT COUNT(*) FROM do_explain($$
+    SELECT *
+    FROM hypo h
+    WHERE id = 1
+$$) e
+WHERE e ~ 'Index.*<\d+>btree_hypo';
+ count 
+-------
+     1
+(1 row)
+
+-- no hypothetical index should have been invalidated
+SELECT invalidated, table_name
+FROM hypopg_list_indexes
+ORDER BY indexrelid;
+ invalidated | table_name 
+-------------+------------
+ f           | hypo
+ f           | hypo2
+(2 rows)
+
+-- VACUUM should not be a problem, but it still sends an invalidation message
+-- so rely on that to check for hypothetical index invalidation on the
+-- underlying relation.
+VACUUM pg_class;
+-- no hypothetical index should not be invalidated after vacuuming an unrelated
+-- table
+SELECT invalidated, table_name
+FROM hypopg_list_indexes
+ORDER BY indexrelid;
+ invalidated | table_name 
+-------------+------------
+ f           | hypo
+ f           | hypo2
+(2 rows)
+
+-- hypothetical index should still be usable
+SELECT COUNT(*) FROM do_explain($$
+    SELECT *
+    FROM hypo h
+    WHERE id = 1
+$$) e
+WHERE e ~ 'Index.*<\d+>btree_hypo';
+ count 
+-------
+     1
+(1 row)
+
+VACUUM hypo;
+-- only the index on hypo should be invalidated
+SELECT invalidated, table_name
+FROM hypopg_list_indexes
+ORDER BY indexrelid;
+ invalidated |  table_name   
+-------------+---------------
+ t           | <invalidated>
+ f           | hypo2
+(2 rows)
+
+-- hypothetical index on hypo should not be usable anymore
+SELECT COUNT(*) FROM do_explain($$
+    SELECT *
+    FROM hypo h
+    WHERE id = 1
+$$) e
+WHERE e ~ 'Seq Scan on hypo';
+ count 
+-------
+     1
+(1 row)
+
+-- we shouldn't be able to get the index DDL or estimated size anymore
+SELECT hypopg_get_indexdef(indexrelid), hypopg_relation_size(indexrelid)
+FROM hypopg() h
+WHERE h.invalidated;
+ hypopg_get_indexdef | hypopg_relation_size 
+---------------------+----------------------
+ <invalidated>       |                     
+(1 row)
+
+DROP SCHEMA nsp_hypo CASCADE;
+NOTICE:  drop cascades to table nsp_hypo.hypo2
+-- the index on nsp_hypo.hypo2 should now be invalidated
+SELECT invalidated, count(*) FROM hypopg() GROUP BY 1 ORDER BY 1;
+ invalidated | count 
+-------------+-------
+ t           |     2
+(1 row)
+
