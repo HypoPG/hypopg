@@ -35,6 +35,7 @@
 #include "optimizer/pathnode.h"
 #endif
 #include "utils/elog.h"
+#include "utils/inval.h"
 
 #include "include/hypopg.h"
 #include "include/hypopg_import.h"
@@ -149,6 +150,9 @@ _PG_init(void)
 											  ALLOCSET_DEFAULT_MAXSIZE
 #endif
 		);
+
+	/* Declare invalidation callbacks. */
+	CacheRegisterRelcacheCallback(HypoCacheRelCallback, (Datum) 0);
 
 	DefineCustomBoolVariable("hypopg.enabled",
 							 "Enable / Disable hypopg",
@@ -389,6 +393,9 @@ hypo_utility_hook(
 static bool
 hypo_index_match_table(hypoIndex *entry, Oid relid)
 {
+	if (entry->invalidated)
+		return false;
+
 	/* Hypothetical index on the exact same relation, use it. */
 	if (entry->relid == relid)
 		return true;

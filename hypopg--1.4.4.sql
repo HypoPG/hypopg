@@ -30,7 +30,8 @@ hypopg_drop_index(IN indexid oid)
     LANGUAGE C STRICT VOLATILE COST 100
 AS '$libdir/hypopg', 'hypopg_drop_index';
 
-CREATE FUNCTION hypopg(OUT indexname text, OUT indexrelid oid,
+CREATE FUNCTION hypopg(OUT invalidated bool,
+                       OUT indexname text, OUT indexrelid oid,
                        OUT indrelid oid, OUT innatts integer,
                        OUT indisunique boolean, OUT indkey int2vector,
                        OUT indcollation oidvector, OUT indclass oidvector,
@@ -38,12 +39,15 @@ CREATE FUNCTION hypopg(OUT indexname text, OUT indexrelid oid,
                        OUT indpred pg_node_tree, OUT amid oid)
     RETURNS SETOF record
     LANGUAGE c COST 100
-AS '$libdir/hypopg', 'hypopg';
+AS '$libdir/hypopg', 'hypopg_144';
 
 CREATE VIEW hypopg_list_indexes
 AS
-    SELECT h.indexrelid, h.indexname AS index_name, n.nspname AS schema_name,
-    coalesce(c.relname, '<dropped>') AS table_name, am.amname AS am_name
+    SELECT h.invalidated,
+    h.indexrelid, h.indexname AS index_name,
+    coalesce(n.nspname, '<invalidated>') AS schema_name,
+    coalesce(c.relname, '<invalidated>') AS table_name,
+    coalesce(am.amname, '<invalidated>') AS am_name
     FROM hypopg() h
     LEFT JOIN pg_catalog.pg_class c ON c.oid = h.indrelid
     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -86,7 +90,8 @@ AS '$libdir/hypopg', 'hypopg_hidden_indexes';
 
 CREATE VIEW hypopg_hidden_indexes
 AS
-    SELECT h.indexid AS indexrelid,
+    SELECT false AS invalidated,
+           h.indexid AS indexrelid,
            i.relname AS index_name,
            n.nspname AS schema_name,
            t.relname AS table_name,
