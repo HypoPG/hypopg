@@ -67,3 +67,114 @@ DROP SCHEMA nsp_hypo CASCADE;
 
 -- the index on nsp_hypo.hypo2 should now be invalidated
 SELECT invalidated, count(*) FROM hypopg() GROUP BY 1 ORDER BY 1;
+
+------------------------------------------------------------------------
+-- Function dependencies in all index expressions and predicate clauses.
+------------------------------------------------------------------------
+CREATE TABLE hypo_inval_functions(a integer, b integer, c integer);
+CREATE FUNCTION hypo_inval_f1(integer) RETURNS integer
+    LANGUAGE SQL IMMUTABLE AS 'SELECT $1 + 1';
+CREATE FUNCTION hypo_inval_f2(integer) RETURNS integer
+    LANGUAGE SQL IMMUTABLE AS 'SELECT $1 + 2';
+CREATE FUNCTION hypo_inval_pred(integer) RETURNS boolean
+    LANGUAGE SQL IMMUTABLE AS 'SELECT $1 > 0';
+CREATE FUNCTION hypo_inval_unrelated(integer) RETURNS integer
+    LANGUAGE SQL IMMUTABLE AS 'SELECT $1 + 3';
+CREATE FUNCTION hypo_inval_op(integer, integer) RETURNS boolean
+    LANGUAGE SQL IMMUTABLE AS 'SELECT $1 = $2';
+CREATE OPERATOR === (
+    LEFTARG = integer, RIGHTARG = integer, PROCEDURE = hypo_inval_op
+);
+
+-- Use different functions in the two columns to detect a skipped expression.
+-- These SQL functions can be inlined during the index's immutability checks;
+-- their dependencies must still be collected from the original expressions.
+DO $$
+DECLARE
+    func text;
+    definition text;
+    idx oid;
+BEGIN
+    -- Each row pairs the function to alter with an index that depends on it.
+    FOR func, definition IN
+        SELECT * FROM (VALUES
+            -- Function in the first index column.
+            ('hypo_inval_f1(integer)',
+             '(hypo_inval_f1(a), hypo_inval_f2(b)) WHERE a > 0 OR hypo_inval_pred(c)'),
+            -- A different function in the second column must also be tracked.
+            ('hypo_inval_f2(integer)',
+             '(hypo_inval_f1(a), hypo_inval_f2(b)) WHERE a > 0 OR hypo_inval_pred(c)'),
+            -- Function inside an OR predicate alongside column expressions.
+            ('hypo_inval_pred(integer)',
+             '(hypo_inval_f1(a), hypo_inval_f2(b)) WHERE a > 0 OR hypo_inval_pred(c)'),
+            -- Column expression with no predicate.
+            ('hypo_inval_f1(integer)', '(hypo_inval_f1(a))'),
+            -- Predicate with no column expressions.
+            ('hypo_inval_pred(integer)', '(a) WHERE hypo_inval_pred(c)'),
+            -- Operator's implementation function, without a direct call.
+            ('hypo_inval_op(integer, integer)', '((a === b))')
+        ) AS cases(func, definition)
+    LOOP
+        -- Start fresh so each function must trigger invalidation on its own.
+        PERFORM hypopg_reset();
+
+        -- These indexes must stay valid: they don't use a user defined function.
+        PERFORM hypopg_create_index('CREATE INDEX ON hypo_inval_functions (a)');
+        PERFORM hypopg_create_index('CREATE INDEX ON hypo_inval_functions (abs(b))');
+
+        -- Save the dependent index's OID to check which index is invalidated.
+        SELECT indexrelid INTO idx FROM hypopg_create_index(
+            'CREATE INDEX ON hypo_inval_functions ' || definition);
+
+        -- An unrelated function change must leave all three indexes valid.
+        ALTER FUNCTION hypo_inval_unrelated(integer) COST 200;
+        IF EXISTS (SELECT 1 FROM hypopg() WHERE invalidated) THEN
+            RAISE WARNING 'unrelated function invalidated an index: %', definition;
+        END IF;
+
+        -- Changing COST sends a function invalidation
+        EXECUTE 'ALTER FUNCTION ' || func || ' COST 200';
+
+        -- Only the index saved above should now be invalidated.
+        IF (SELECT count(*) FROM hypopg() WHERE invalidated) <> 1 OR
+           NOT (SELECT invalidated FROM hypopg() WHERE indexrelid = idx) THEN
+            RAISE WARNING 'incorrect invalidation for %: %', func, definition;
+        END IF;
+
+        -- Definition and size lookup must stop using the invalidated index.
+        IF hypopg_get_indexdef(idx) <> '<invalidated>' OR
+           hypopg_relation_size(idx) IS NOT NULL THEN
+            RAISE WARNING 'invalidated index remains accessible: %', definition;
+        END IF;
+    END LOOP;
+END
+$$;
+
+-- DROP must also invalidate the dependent index and leave the plain one valid.
+SELECT hypopg_reset();
+SELECT count(*) FROM hypopg_create_index(
+    'CREATE INDEX ON hypo_inval_functions (a)');
+SELECT count(*) FROM hypopg_create_index(
+    'CREATE INDEX ON hypo_inval_functions (hypo_inval_f1(a))');
+
+-- Both indexes are valid before the function is dropped.
+SELECT invalidated, indexname ~ '_expr$' AS expression
+FROM hypopg() ORDER BY indexrelid;
+
+DROP FUNCTION hypo_inval_f1(integer);
+
+-- Only the expression index should be invalidated.
+SELECT invalidated, indexname ~ '_expr$' AS expression
+FROM hypopg() ORDER BY indexrelid;
+SELECT hypopg_get_indexdef(indexrelid), hypopg_relation_size(indexrelid)
+FROM hypopg() WHERE invalidated;
+
+-- Remove the remaining indexes before dropping the test objects.
+SELECT hypopg_reset();
+
+DROP OPERATOR === (integer, integer);
+DROP FUNCTION hypo_inval_op(integer, integer);
+DROP FUNCTION hypo_inval_f2(integer);
+DROP FUNCTION hypo_inval_pred(integer);
+DROP FUNCTION hypo_inval_unrelated(integer);
+DROP TABLE hypo_inval_functions;

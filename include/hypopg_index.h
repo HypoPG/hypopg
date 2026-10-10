@@ -56,6 +56,7 @@ typedef struct hypoIndex
 	Oid			reltablespace;	/* tablespace of the index, if set */
 	char	   *indexname;		/* hypothetical index name */
 	bool		invalidated;	/* was a cache invalidation received? */
+	List	   *invalItems;		/* function dependencies as PlanInvalItems */
 
 	BlockNumber pages;			/* number of estimated disk pages for the
 								 * index */
@@ -151,5 +152,6 @@ void		hypo_injectHypotheticalIndex(PlannerInfo *root,
 void hypo_hideIndexes(RelOptInfo *rel);
 
 void HypoCacheRelCallback(Datum arg, Oid relid);
+void HypoCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue);
 
 #endif

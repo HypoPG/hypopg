@@ -47,10 +47,12 @@
 #if PG_VERSION_NUM >= 120000
 #include "nodes/makefuncs.h"
 #endif
+#include "nodes/plannodes.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #if PG_VERSION_NUM < 120000
+#include "optimizer/planmain.h"
 #include "optimizer/var.h"
 #else
 #include "optimizer/optimizer.h"
@@ -860,6 +862,43 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 								 )));
 		}
 
+		/*
+		 * Collect dependencies on functions from every index column
+		 * expressions and the predicate clause if any.  This relies on
+		 * upstream extract_query_dependencies, which skips built-in functions
+		 * and uses the unplanned expressions, meaning that constant folding
+		 * and inlining cannot hide dependencies.
+		 */
+		if (entry->indexprs != NIL || entry->indpred != NIL)
+		{
+			List	   *expressions = list_copy(entry->indexprs);
+			List	   *relationOids;
+			List	   *invalItems;
+#if PG_VERSION_NUM >= 90500
+			bool		hasRowSecurity;
+#endif
+			MemoryContext oldcontext;
+
+			foreach(lc, entry->indpred)
+				expressions = lappend(expressions, lfirst(lc));
+
+			extract_query_dependencies((Node *) expressions,
+									   &relationOids, &invalItems,
+#if PG_VERSION_NUM >= 90500
+									   &hasRowSecurity
+#endif
+			);
+
+			/* Save the found dependencies. */
+			oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+			entry->invalItems = copyObject(invalItems);
+			MemoryContextSwitchTo(oldcontext);
+
+			list_free(relationOids);
+			list_free_deep(invalItems);
+			list_free(expressions);
+		}
+
 		/* No more elog beyond this point. */
 	}
 	PG_CATCH();
@@ -986,6 +1025,7 @@ hypo_index_pfree(hypoIndex * entry)
 		list_free_deep(entry->indexprs);
 	if (entry->indpred)
 		pfree(entry->indpred);
+	list_free_deep(entry->invalItems);
 #if PG_VERSION_NUM >= 90500
 	pfree(entry->canreturn);
 #endif
@@ -2455,5 +2495,39 @@ HypoCacheRelCallback(Datum arg, Oid relid)
 		 */
 		if (!OidIsValid(relid) || entry->relid == relid)
 			entry->invalidated = true;
+	}
+}
+
+/*
+ * Invalidate hypothetical indexes depending on the object with the specified
+ * hash value, or all hypothetical indexes is hashvalue == 0.
+ *
+ * For now only PROCOID is supported.
+ */
+void
+HypoCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)
+{
+	ListCell   *lc;
+
+	foreach(lc, hypoIndexes)
+	{
+		hypoIndex  *entry = (hypoIndex *) lfirst(lc);
+		ListCell   *lc2;
+
+		if (entry->invalidated)
+			continue;
+
+		foreach(lc2, entry->invalItems)
+		{
+			PlanInvalItem *item = (PlanInvalItem *) lfirst(lc2);
+
+			/* A zero hash means that the whole cache was invalidated. */
+			if (item->cacheId == cacheid &&
+				(hashvalue == 0 || item->hashValue == hashvalue))
+			{
+				entry->invalidated = true;
+				break;
+			}
+		}
 	}
 }

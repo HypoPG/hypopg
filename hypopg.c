@@ -36,6 +36,7 @@
 #endif
 #include "utils/elog.h"
 #include "utils/inval.h"
+#include "utils/syscache.h"
 
 #include "include/hypopg.h"
 #include "include/hypopg_import.h"
@@ -153,6 +154,7 @@ _PG_init(void)
 
 	/* Declare invalidation callbacks. */
 	CacheRegisterRelcacheCallback(HypoCacheRelCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(PROCOID, HypoCacheObjectCallback, (Datum) 0);
 
 	DefineCustomBoolVariable("hypopg.enabled",
 							 "Enable / Disable hypopg",
