@@ -1,0 +1,85 @@
+-- Access method dependencies, pg9.6+ (requires contrib bloom).
+CREATE EXTENSION bloom;
+-- Remove all the hypothetical indexes if any
+SELECT hypopg_reset();
+CREATE TABLE hypo_inval_am(a integer);
+CREATE FUNCTION hypo_inval_am_func(integer) RETURNS integer
+    LANGUAGE SQL IMMUTABLE AS 'SELECT $1 + 1';
+
+DO $$
+DECLARE
+    action text;
+    plain_idx oid;
+    bloom_idx oid;
+    expr_idx oid;
+    expected_inval_count integer;
+    is_inval bool;
+BEGIN
+    FOREACH action IN ARRAY ARRAY['function', 'drop']
+    LOOP
+        PERFORM hypopg_reset();
+        SELECT indexrelid INTO plain_idx FROM hypopg_create_index(
+            'CREATE INDEX ON hypo_inval_am (a)');
+        SELECT indexrelid INTO bloom_idx FROM hypopg_create_index(
+            'CREATE INDEX ON hypo_inval_am USING bloom (a)');
+        SELECT indexrelid INTO expr_idx FROM hypopg_create_index(
+            'CREATE INDEX ON hypo_inval_am USING bloom (hypo_inval_am_func(a))');
+
+        -- Changes to an unrelated AM must leave all indexes valid.
+        CREATE ACCESS METHOD hypo_inval_unrelated TYPE INDEX HANDLER bthandler;
+        DROP ACCESS METHOD hypo_inval_unrelated;
+        IF EXISTS (SELECT 1 FROM hypopg() WHERE invalidated) THEN
+            RAISE WARNING 'unrelated access method invalidated an index: %', action;
+        END IF;
+
+        -- An update on pg_am will send an invalidation for AMOID cache and the
+        -- uderlying access method oid, even if the update is a no-op.  So
+        -- forcing an invalidation message for a core AM should not invalidate
+        -- any hypothetical index.
+        UPDATE pg_catalog.pg_am SET amname = amname WHERE amname = 'btree';
+        IF EXISTS (SELECT 1 FROM hypopg() WHERE invalidated) THEN
+            RAISE WARNING 'core access method invalidated an index: %', action;
+        END IF;
+
+        IF action = 'function' THEN
+            -- Send an invalidation for hypo_inval_am_func, so only the
+            -- hypothetical index using it should be invalidated
+            ALTER FUNCTION hypo_inval_am_func(integer) COST 200;
+            expected_inval_count := 1;
+        ELSE
+            -- Drop the AM along with its extension-owned operator classes.
+            DROP EXTENSION bloom;
+            expected_inval_count := 2;
+        END IF;
+
+        -- We should have the expected number of invalidated indexes
+        IF (SELECT count(*) FROM hypopg() WHERE invalidated) <> expected_inval_count THEN
+            RAISE WARNING 'incorrect access method/function invalidation: %', action;
+        END IF;
+
+        -- Check the exact hypothetical indexes invalidated
+
+        -- plain_idx doesn't have any dependency here
+        IF (SELECT invalidated FROM hypopg() WHERE indexrelid = plain_idx) THEN
+            RAISE WARNING 'plain_idx should never be invalidated';
+        END IF;
+
+        -- expr_idx depends on both bloom and the function so in both cases
+        -- it's invalidated
+        IF (SELECT invalidated FROM hypopg() WHERE indexrelid = expr_idx) <> true THEN
+            RAISE WARNING 'expr_idx should always be invalidated';
+        END IF;
+
+        -- bloom_idx only depends on bloom so it should only be invalidated for
+        -- the "drop" case
+        SELECT invalidated INTO is_inval FROM hypopg() WHERE indexrelid = bloom_idx;
+        IF is_inval <> (action = 'drop') THEN
+            RAISE WARNING 'bloom_idx should only be invalidated for scenario drop, after % invalidated is %',
+                action, is_inval;
+        END IF;
+    END LOOP;
+END
+$$;
+
+DROP FUNCTION hypo_inval_am_func(integer);
+DROP TABLE hypo_inval_am;

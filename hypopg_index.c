@@ -180,6 +180,7 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 
 	entry->relam = oid;
 	entry->invalidated = false;
+	entry->invalItems = NIL;
 
 #if PG_VERSION_NUM >= 90600
 	/*
@@ -897,6 +898,21 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 			list_free(relationOids);
 			list_free_deep(invalItems);
 			list_free(expressions);
+		}
+
+		/* Add a dependency on the access methid if it's not a core one. */
+		if (entry->relam >= FirstNormalObjectId)
+		{
+			MemoryContext oldcontext;
+			PlanInvalItem *item;
+
+			oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+			item = makeNode(PlanInvalItem);
+			item->cacheId = AMOID;
+			item->hashValue = GetSysCacheHashValue1(AMOID,
+												  ObjectIdGetDatum(entry->relam));
+			entry->invalItems = lappend(entry->invalItems, item);
+			MemoryContextSwitchTo(oldcontext);
 		}
 
 		/* No more elog beyond this point. */
@@ -2500,9 +2516,10 @@ HypoCacheRelCallback(Datum arg, Oid relid)
 
 /*
  * Invalidate hypothetical indexes depending on the object with the specified
- * hash value, or all hypothetical indexes is hashvalue == 0.
+ * hash value, or all hypothetical indexes depending on that cache if
+ * hashvalue == 0.
  *
- * For now only PROCOID is supported.
+ * For now PROCOID and AMOID are supported.
  */
 void
 HypoCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)
