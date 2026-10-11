@@ -156,6 +156,7 @@ _PG_init(void)
 	CacheRegisterRelcacheCallback(HypoCacheRelCallback, (Datum) 0);
 	CacheRegisterSyscacheCallback(PROCOID, HypoCacheObjectCallback, (Datum) 0);
 	CacheRegisterSyscacheCallback(AMOID, HypoCacheObjectCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(CLAOID, HypoCacheObjectCallback, (Datum) 0);
 
 	DefineCustomBoolVariable("hypopg.enabled",
 							 "Enable / Disable hypopg",

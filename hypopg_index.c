@@ -915,6 +915,24 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 			MemoryContextSwitchTo(oldcontext);
 		}
 
+		/* Add dependencies on non-core operator classes of all key columns. */
+		for (attn = 0; attn < entry->nkeycolumns; attn++)
+		{
+			MemoryContext oldcontext;
+			PlanInvalItem *item;
+
+			if (entry->opclass[attn] < FirstNormalObjectId)
+				continue;
+
+			oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+			item = makeNode(PlanInvalItem);
+			item->cacheId = CLAOID;
+			item->hashValue = GetSysCacheHashValue1(CLAOID,
+												  ObjectIdGetDatum(entry->opclass[attn]));
+			entry->invalItems = lappend(entry->invalItems, item);
+			MemoryContextSwitchTo(oldcontext);
+		}
+
 		/* No more elog beyond this point. */
 	}
 	PG_CATCH();
@@ -2519,7 +2537,7 @@ HypoCacheRelCallback(Datum arg, Oid relid)
  * hash value, or all hypothetical indexes depending on that cache if
  * hashvalue == 0.
  *
- * For now PROCOID and AMOID are supported.
+ * For now PROCOID, AMOID and CLAOID are supported.
  */
 void
 HypoCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)

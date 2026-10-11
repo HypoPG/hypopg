@@ -71,7 +71,7 @@ typedef struct hypoIndex
 	short int  *indexkeys;		/* attnums */
 	Oid		   *indexcollations;	/* OIDs of collations of index columns */
 	Oid		   *opfamily;		/* OIDs of operator families for columns */
-	Oid		   *opclass;		/* OIDs of opclass data types */
+	Oid		   *opclass;		/* OIDs of operator classes for key columns */
 	Oid		   *opcintype;		/* OIDs of opclass declared input data types */
 	Oid		   *sortopfamily;	/* OIDs of btree opfamilies, if orderable */
 	bool	   *reverse_sort;	/* is sort order descending? */

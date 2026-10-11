@@ -252,3 +252,103 @@ DROP FUNCTION hypo_inval_f2(integer);
 DROP FUNCTION hypo_inval_pred(integer);
 DROP FUNCTION hypo_inval_unrelated(integer);
 DROP TABLE hypo_inval_functions;
+------------------------------------------------------------------------
+-- Operator class dependencies on every key column, including expressions.
+------------------------------------------------------------------------
+CREATE TABLE hypo_inval_opclasses(a integer, b integer);
+CREATE FUNCTION hypo_inval_opclass_func(integer) RETURNS integer
+    LANGUAGE SQL IMMUTABLE AS 'SELECT $1 + 1';
+CREATE OPERATOR CLASS hypo_inval_opclass1 FOR TYPE integer USING btree AS
+    OPERATOR 1 < (integer, integer),
+    OPERATOR 2 <= (integer, integer),
+    OPERATOR 3 = (integer, integer),
+    OPERATOR 4 >= (integer, integer),
+    OPERATOR 5 > (integer, integer),
+    FUNCTION 1 btint4cmp(integer, integer);
+CREATE OPERATOR CLASS hypo_inval_opclass2 FOR TYPE integer USING btree AS
+    OPERATOR 1 < (integer, integer),
+    OPERATOR 2 <= (integer, integer),
+    OPERATOR 3 = (integer, integer),
+    OPERATOR 4 >= (integer, integer),
+    OPERATOR 5 > (integer, integer),
+    FUNCTION 1 btint4cmp(integer, integer);
+CREATE OPERATOR CLASS hypo_inval_opclass_unrelated FOR TYPE integer USING btree AS
+    OPERATOR 1 < (integer, integer),
+    OPERATOR 2 <= (integer, integer),
+    OPERATOR 3 = (integer, integer),
+    OPERATOR 4 >= (integer, integer),
+    OPERATOR 5 > (integer, integer),
+    FUNCTION 1 btint4cmp(integer, integer);
+DO $$
+DECLARE
+    action text;
+    plain_idx oid;
+    first_idx oid;
+    second_idx oid;
+    expr_idx oid;
+    expected_invalid oid[];
+BEGIN
+    FOREACH action IN ARRAY ARRAY['first', 'second', 'function', 'drop']
+    LOOP
+        PERFORM hypopg_reset();
+        SELECT indexrelid INTO plain_idx FROM hypopg_create_index(
+            'CREATE INDEX ON hypo_inval_opclasses (a, b)');
+        SELECT indexrelid INTO first_idx FROM hypopg_create_index(
+            'CREATE INDEX ON hypo_inval_opclasses (a hypo_inval_opclass1, b hypo_inval_opclass2)');
+        SELECT indexrelid INTO second_idx FROM hypopg_create_index(
+            'CREATE INDEX ON hypo_inval_opclasses (a, b hypo_inval_opclass2)');
+        SELECT indexrelid INTO expr_idx FROM hypopg_create_index(
+            'CREATE INDEX ON hypo_inval_opclasses (hypo_inval_opclass_func(a) hypo_inval_opclass1)');
+
+        -- Neither unrelated nor built-in operator classes are dependencies.
+        ALTER OPERATOR CLASS hypo_inval_opclass_unrelated USING btree
+            RENAME TO hypo_inval_opclass_renamed;
+        ALTER OPERATOR CLASS hypo_inval_opclass_renamed USING btree
+            RENAME TO hypo_inval_opclass_unrelated;
+        UPDATE pg_catalog.pg_opclass SET opcname = opcname
+            WHERE oid < 16384 AND opcname = 'int4_ops';
+        IF EXISTS (SELECT 1 FROM hypopg() WHERE invalidated) THEN
+            RAISE WARNING 'unrelated or core operator class invalidated an index: %', action;
+        END IF;
+
+        IF action = 'first' THEN
+            ALTER OPERATOR CLASS hypo_inval_opclass1 USING btree
+                RENAME TO hypo_inval_opclass_renamed;
+            expected_invalid := ARRAY[first_idx, expr_idx];
+        ELSIF action = 'second' THEN
+            ALTER OPERATOR CLASS hypo_inval_opclass2 USING btree
+                RENAME TO hypo_inval_opclass_renamed;
+            expected_invalid := ARRAY[first_idx, second_idx];
+        ELSIF action = 'function' THEN
+            ALTER FUNCTION hypo_inval_opclass_func(integer) COST 200;
+            expected_invalid := ARRAY[expr_idx];
+        ELSE
+            DROP OPERATOR CLASS hypo_inval_opclass1 USING btree;
+            expected_invalid := ARRAY[first_idx, expr_idx];
+        END IF;
+
+        -- Check every index, including the plain_idx using built-in classes.
+        IF (SELECT count(*) FROM hypopg()) <> 4 OR EXISTS (
+            SELECT 1 FROM hypopg()
+            WHERE invalidated IS DISTINCT FROM (indexrelid = ANY(expected_invalid))
+        ) THEN
+            RAISE WARNING 'incorrect operator class/function invalidation: %', action;
+        END IF;
+
+        PERFORM hypopg_reset();
+        IF action = 'first' THEN
+            ALTER OPERATOR CLASS hypo_inval_opclass_renamed USING btree
+                RENAME TO hypo_inval_opclass1;
+        ELSIF action = 'second' THEN
+            ALTER OPERATOR CLASS hypo_inval_opclass_renamed USING btree
+                RENAME TO hypo_inval_opclass2;
+        END IF;
+    END LOOP;
+END
+$$;
+RESET enable_seqscan;
+DROP OPERATOR FAMILY hypo_inval_opclass1 USING btree;
+DROP OPERATOR FAMILY hypo_inval_opclass2 USING btree;
+DROP OPERATOR FAMILY hypo_inval_opclass_unrelated USING btree;
+DROP FUNCTION hypo_inval_opclass_func(integer);
+DROP TABLE hypo_inval_opclasses;
