@@ -56,7 +56,7 @@ typedef struct hypoIndex
 	Oid			reltablespace;	/* tablespace of the index, if set */
 	char	   *indexname;		/* hypothetical index name */
 	bool		invalidated;	/* was a cache invalidation received? */
-	List	   *invalItems;		/* function dependencies as PlanInvalItems */
+	List	   *invalItems;		/* object dependencies as PlanInvalItems */
 
 	BlockNumber pages;			/* number of estimated disk pages for the
 								 * index */
