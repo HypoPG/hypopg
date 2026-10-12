@@ -116,6 +116,13 @@ typedef struct hypoIndex
 	List	   *options;		/* WITH clause options: a list of DefElem */
 	bool		amcanorder;		/* does AM support order by column value? */
 
+	/* Cached GIN statistics collected through the opclass extractValue proc. */
+	bool		gin_sampled;
+	bool		gin_sample_valid;
+	double		gin_keys_per_tuple;
+	double		gin_unique_ratio;
+	double		gin_avg_key_width;
+
 }			hypoIndex;
 
 /* List of hypothetic indexes for current backend */
