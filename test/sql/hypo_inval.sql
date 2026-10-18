@@ -371,3 +371,153 @@ END
 $do$;
 RESET enable_seqscan;
 DROP TABLE hypo_inval_relations;
+
+------------------------------------------------------------------------
+-- Type dependencies in columns, nested expressions, predicates and constants.
+------------------------------------------------------------------------
+CREATE DOMAIN hypo_inval_type1 AS integer;
+CREATE DOMAIN hypo_inval_type2 AS integer;
+CREATE DOMAIN hypo_inval_column_type AS integer;
+CREATE TYPE hypo_inval_referenced_type AS ENUM ('x', 'y');
+CREATE TABLE hypo_inval_types(a integer, b integer, c hypo_inval_column_type);
+CREATE FUNCTION hypo_inval_type_func(integer) RETURNS integer
+    LANGUAGE SQL IMMUTABLE AS 'SELECT $1 + 1';
+DO $do$
+DECLARE
+    action text;
+    plain_idx oid;
+    nested_idx oid;
+    pred_idx oid;
+    column_idx oid;
+    ref_idx oid;
+    ref_pred_idx oid;
+    oid_idx oid;
+    mixed_idx oid;
+    expected_invalid oid[];
+BEGIN
+    FOREACH action IN ARRAY ARRAY['first', 'second', 'column', 'regtype', 'function', 'drop']
+    LOOP
+        PERFORM hypopg_reset();
+        CREATE DOMAIN hypo_inval_unrelated_type AS integer;
+        CREATE TABLE hypo_inval_unrelated_table(id integer);
+
+        -- A built-in column type must not depend on any of the custom types.
+        SELECT indexrelid INTO plain_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_types (a)$$);
+        -- Both intermediate domain types matter even though the result is int.
+        -- CASE also exercises traversal through branches and their conditions.
+        SELECT indexrelid INTO nested_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_types
+                ((CASE WHEN a > 0 THEN ((a::hypo_inval_type1)::hypo_inval_type2)::integer
+                       ELSE 0 END))$$);
+        -- A predicate can contain a type absent from every index key.
+        SELECT indexrelid INTO pred_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_types (b) WHERE a::hypo_inval_type2 > 0$$);
+        -- Simple columns have no expression tree, so collect their types too.
+        SELECT indexrelid INTO column_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_types (c)$$);
+        -- The constant's value names a type distinct from its own regtype type.
+        SELECT indexrelid INTO ref_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_types (b, ('hypo_inval_referenced_type'::regtype))$$);
+        -- An OID comparison may coerce a regtype constant in a predicate.
+        SELECT indexrelid INTO ref_pred_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_types (b)
+                WHERE a::oid = 'hypo_inval_referenced_type'::regtype$$);
+        -- Coercion can erase the regtype label; track matching OIDs conservatively.
+        SELECT indexrelid INTO oid_idx FROM hypopg_create_index(format(
+            $$CREATE INDEX ON hypo_inval_types (b, (%L::oid))$$,
+            'hypo_inval_referenced_type'::regtype::oid));
+        -- Type collection must preserve the existing function dependencies.
+        SELECT indexrelid INTO mixed_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_types
+                (((hypo_inval_type_func(a)::hypo_inval_type1)::integer))$$);
+
+        DROP DOMAIN hypo_inval_unrelated_type;
+        DROP TABLE hypo_inval_unrelated_table;
+        IF EXISTS (SELECT 1 FROM hypopg() WHERE invalidated) THEN
+            RAISE WARNING 'unrelated type or table invalidated an index: %', action;
+        END IF;
+
+        IF action = 'first' THEN
+            ALTER DOMAIN hypo_inval_type1 RENAME TO hypo_inval_type_renamed;
+            expected_invalid := ARRAY[nested_idx, mixed_idx];
+        ELSIF action = 'second' THEN
+            ALTER DOMAIN hypo_inval_type2 RENAME TO hypo_inval_type_renamed;
+            expected_invalid := ARRAY[nested_idx, pred_idx];
+        ELSIF action = 'column' THEN
+            ALTER DOMAIN hypo_inval_column_type RENAME TO hypo_inval_type_renamed;
+            expected_invalid := ARRAY[column_idx];
+        ELSIF action = 'regtype' THEN
+            ALTER TYPE hypo_inval_referenced_type RENAME TO hypo_inval_type_renamed;
+            expected_invalid := ARRAY[ref_idx, ref_pred_idx, oid_idx];
+        ELSIF action = 'function' THEN
+            ALTER FUNCTION hypo_inval_type_func(integer) COST 200;
+            expected_invalid := ARRAY[mixed_idx];
+        ELSE
+            DROP TYPE hypo_inval_referenced_type;
+            expected_invalid := ARRAY[ref_idx, ref_pred_idx, oid_idx];
+        END IF;
+
+        IF (SELECT count(*) FROM hypopg()) <> 8 OR EXISTS (
+            SELECT 1 FROM hypopg()
+            WHERE invalidated IS DISTINCT FROM (indexrelid = ANY(expected_invalid))
+        ) THEN
+            RAISE WARNING 'incorrect type/function invalidation: %', action;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM hypopg() WHERE indexrelid = ANY(expected_invalid)
+            AND (hypopg_get_indexdef(indexrelid) IS DISTINCT FROM '<invalidated>'
+                 OR hypopg_relation_size(indexrelid) IS NOT NULL)
+        ) THEN
+            RAISE WARNING 'invalidated type-dependent index remains accessible: %', action;
+        END IF;
+
+        PERFORM hypopg_reset();
+        IF action = 'first' THEN
+            ALTER DOMAIN hypo_inval_type_renamed RENAME TO hypo_inval_type1;
+        ELSIF action = 'second' THEN
+            ALTER DOMAIN hypo_inval_type_renamed RENAME TO hypo_inval_type2;
+        ELSIF action = 'column' THEN
+            ALTER DOMAIN hypo_inval_type_renamed RENAME TO hypo_inval_column_type;
+        ELSIF action = 'regtype' THEN
+            ALTER TYPE hypo_inval_type_renamed RENAME TO hypo_inval_referenced_type;
+        END IF;
+    END LOOP;
+END
+$do$;
+DROP FUNCTION hypo_inval_type_func(integer);
+DROP TABLE hypo_inval_types;
+DROP DOMAIN hypo_inval_type1;
+DROP DOMAIN hypo_inval_type2;
+DROP DOMAIN hypo_inval_column_type;
+
+-- Track the type of an included column even when every key is built-in.
+DO $do$
+DECLARE
+    included_idx oid;
+BEGIN
+    -- INCLUDE is only supported on PostgreSQL 11 and later.
+    IF current_setting('server_version_num')::integer < 110000 THEN
+        RETURN;
+    END IF;
+
+    CREATE DOMAIN hypo_inval_include_type AS integer;
+    CREATE TABLE hypo_inval_include_types(a integer, b hypo_inval_include_type);
+    PERFORM hypopg_reset();
+    -- The plain index has no dependency on the included column's type.
+    PERFORM hypopg_create_index($$CREATE INDEX ON hypo_inval_include_types (a)$$);
+    SELECT indexrelid INTO included_idx FROM hypopg_create_index(
+        $$CREATE INDEX ON hypo_inval_include_types (a) INCLUDE (b)$$);
+
+    ALTER DOMAIN hypo_inval_include_type RENAME TO hypo_inval_include_type_renamed;
+    IF (SELECT count(*) FROM hypopg()) <> 2 OR EXISTS (
+        SELECT 1 FROM hypopg()
+        WHERE invalidated IS DISTINCT FROM (indexrelid = included_idx)
+    ) THEN
+        RAISE WARNING 'incorrect included column type invalidation';
+    END IF;
+    PERFORM hypopg_reset();
+    DROP TABLE hypo_inval_include_types;
+    DROP DOMAIN hypo_inval_include_type_renamed;
+END
+$do$;

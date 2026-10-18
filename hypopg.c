@@ -155,6 +155,7 @@ _PG_init(void)
 	/* Declare invalidation callbacks. */
 	CacheRegisterRelcacheCallback(HypoCacheRelCallback, (Datum) 0);
 	CacheRegisterSyscacheCallback(PROCOID, HypoCacheObjectCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(TYPEOID, HypoCacheObjectCallback, (Datum) 0);
 	CacheRegisterSyscacheCallback(AMOID, HypoCacheObjectCallback, (Datum) 0);
 	CacheRegisterSyscacheCallback(CLAOID, HypoCacheObjectCallback, (Datum) 0);
 
