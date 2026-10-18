@@ -280,3 +280,94 @@ DROP OPERATOR FAMILY hypo_inval_opclass2 USING btree;
 DROP OPERATOR FAMILY hypo_inval_opclass_unrelated USING btree;
 DROP FUNCTION hypo_inval_opclass_func(integer);
 DROP TABLE hypo_inval_opclasses;
+
+------------------------------------------------------------------------
+-- Relation references in expressions and predicates, including OID constants.
+------------------------------------------------------------------------
+CREATE TABLE hypo_inval_relations(a integer, b integer);
+INSERT INTO hypo_inval_relations SELECT i, i FROM generate_series(1, 1000) i;
+ANALYZE hypo_inval_relations;
+SET enable_seqscan = off;
+DO $do$
+DECLARE
+    action text;
+    plain_idx oid;
+    expr_idx oid;
+    pred_idx oid;
+    oid_idx oid;
+    expr_name text;
+    expected_invalid oid[];
+BEGIN
+    FOREACH action IN ARRAY ARRAY['first', 'second']
+    LOOP
+        PERFORM hypopg_reset();
+        CREATE TABLE hypo_inval_ref1(id integer);
+        CREATE TABLE hypo_inval_ref2(id integer);
+        CREATE TABLE hypo_inval_ref_unrelated(id integer);
+
+        -- This index references only the indexed table and must remain valid
+        -- when either of the other relations is dropped.
+        SELECT indexrelid INTO plain_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_relations (b)$$);
+        -- Each reference must independently invalidate this index.
+        SELECT indexrelid, indexname INTO expr_idx, expr_name FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_relations
+                (a, ('hypo_inval_ref1'::regclass), ('hypo_inval_ref2'::regclass))$$);
+        SELECT indexrelid INTO pred_idx FROM hypopg_create_index(
+            $$CREATE INDEX ON hypo_inval_relations (b)
+                WHERE a::oid = 'hypo_inval_ref1'::regclass$$);
+        -- The upstream extractor conservatively tracks plain OID constants too.
+        SELECT indexrelid INTO oid_idx FROM hypopg_create_index(format(
+            $$CREATE INDEX ON hypo_inval_relations (b, (%L::oid))$$,
+            'hypo_inval_ref1'::regclass::oid));
+
+        DROP TABLE hypo_inval_ref_unrelated;
+        IF EXISTS (SELECT 1 FROM hypopg() WHERE invalidated) THEN
+            RAISE WARNING 'unrelated relation invalidated an index: %', action;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM do_explain('SELECT * FROM hypo_inval_relations WHERE a = 1')
+            WHERE position(expr_name in a) > 0
+        ) THEN
+            RAISE WARNING 'referencing index was not used before invalidation: %', action;
+        END IF;
+
+        IF action = 'first' THEN
+            DROP TABLE hypo_inval_ref1;
+            expected_invalid := ARRAY[expr_idx, pred_idx, oid_idx];
+        ELSE
+            DROP TABLE hypo_inval_ref2;
+            expected_invalid := ARRAY[expr_idx];
+        END IF;
+
+        IF (SELECT count(*) FROM hypopg()) <> 4 OR EXISTS (
+            SELECT 1 FROM hypopg()
+            WHERE invalidated IS DISTINCT FROM (indexrelid = ANY(expected_invalid))
+        ) THEN
+            RAISE WARNING 'incorrect referenced relation invalidation: %', action;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM hypopg() WHERE indexrelid = ANY(expected_invalid)
+            AND (hypopg_get_indexdef(indexrelid) IS DISTINCT FROM '<invalidated>'
+                 OR hypopg_relation_size(indexrelid) IS NOT NULL)
+        ) THEN
+            RAISE WARNING 'invalidated referencing index remains accessible: %', action;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM do_explain('SELECT * FROM hypo_inval_relations WHERE a = 1')
+            WHERE position(expr_name in a) > 0
+        ) THEN
+            RAISE WARNING 'invalidated referencing index remains in plan: %', action;
+        END IF;
+
+        PERFORM hypopg_reset();
+        IF action = 'first' THEN
+            DROP TABLE hypo_inval_ref2;
+        ELSE
+            DROP TABLE hypo_inval_ref1;
+        END IF;
+    END LOOP;
+END
+$do$;
+RESET enable_seqscan;
+DROP TABLE hypo_inval_relations;
