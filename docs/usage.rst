@@ -88,8 +88,28 @@ The following access methods are supported:
 
 - btree
 - brin
+- gin
 - hash (requires PostgreSQL 10 or above)
 - bloom (requires the bloom extension to be installed)
+
+GIN indexes
+-----------
+
+Hypothetical GIN indexes use the same ``CREATE INDEX ... USING gin`` statement
+as a real index, including array, ``tsvector``, and ``jsonb`` operator classes.
+
+GIN size depends on extracted keys and posting lists, not on heap-tuple width.
+HypoPG takes a bounded sample of indexed rows and passes each value through the
+selected operator class's ``extractValue`` support function.  This generic
+approach works without per-type tuning, including for extension operator
+classes.  On PostgreSQL 9.5 and later, the result is cached for the lifetime of
+the hypothetical index.  PostgreSQL 9.2 through 9.4 do not provide
+``TABLESAMPLE``, so HypoPG uses catalog statistics and average column width
+instead.  The same fallback is used when sampling is unavailable at runtime.
+
+The sample is limited to 1024 rows and 100,000 extracted keys.  Treat the
+estimated size and cost as conservative planning evidence; validate important
+candidates with a representative physical index.
 
 Create a hypothetical index
 ---------------------------
