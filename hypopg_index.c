@@ -89,6 +89,7 @@ static Oid	BLOOM_AM_OID = InvalidOid;
 #endif
 
 #if PG_VERSION_NUM < 180000
+#define get_opfamily_member_for_cmptype(f, l, r, c) get_opfamily_member(f, l, r, c)
 #define CompareType int16
 #define COMPARE_LT BTLessStrategyNumber
 #endif
@@ -965,24 +966,25 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 		for (attn = 0; attn < nkeycolumns; attn++)
 		{
 			Oid			ltopr;
-			Oid			btopfamily;
-			Oid			btopcintype;
-			CompareType	btstrategy;
+			Oid			opfamily;
+			Oid			opcintype;
+			CompareType	cmdtype;
 
-			ltopr = get_opfamily_member(entry->opfamily[attn],
-										entry->opcintype[attn],
-										entry->opcintype[attn],
-										BTLessStrategyNumber);
+			ltopr = get_opfamily_member_for_cmptype(entry->opfamily[attn],
+													entry->opcintype[attn],
+													entry->opcintype[attn],
+													COMPARE_LT);
+
 			if (OidIsValid(ltopr) &&
 				get_ordering_op_properties(ltopr,
-										   &btopfamily,
-										   &btopcintype,
-										   &btstrategy) &&
-				btopcintype == entry->opcintype[attn] &&
-				btstrategy == COMPARE_LT)
+										   &opfamily,
+										   &opcintype,
+										   &cmdtype) &&
+				opcintype == entry->opcintype[attn] &&
+				cmdtype == COMPARE_LT)
 			{
 				/* Successful mapping */
-				entry->sortopfamily[attn] = btopfamily;
+				entry->sortopfamily[attn] = opfamily;
 			}
 			else
 			{
