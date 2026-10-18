@@ -154,5 +154,6 @@ void hypo_hideIndexes(RelOptInfo *rel);
 
 void HypoCacheRelCallback(Datum arg, Oid relid);
 void HypoCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue);
+void HypoCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue);
 
 #endif

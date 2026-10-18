@@ -159,6 +159,18 @@ _PG_init(void)
 	CacheRegisterSyscacheCallback(AMOID, HypoCacheObjectCallback, (Datum) 0);
 	CacheRegisterSyscacheCallback(CLAOID, HypoCacheObjectCallback, (Datum) 0);
 
+	/* These dependencies aren't collected individually, so invalidate all. */
+	CacheRegisterSyscacheCallback(COLLOID, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(OPEROID, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(OPFAMILYOID, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(AMOPOPID, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(AMPROCNUM, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(TSCONFIGOID, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(TSCONFIGMAP, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(TSDICTOID, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(TSPARSEROID, HypoCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(TSTEMPLATEOID, HypoCacheSysCallback, (Datum) 0);
+
 	DefineCustomBoolVariable("hypopg.enabled",
 							 "Enable / Disable hypopg",
 							 NULL,
