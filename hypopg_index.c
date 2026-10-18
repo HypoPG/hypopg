@@ -116,6 +116,8 @@ PG_FUNCTION_INFO_V1(hypopg_hidden_indexes);
 
 
 static void hypo_addIndex(hypoIndex * entry);
+static void hypo_add_type_dependency(hypoIndex * entry, Oid typeid);
+static bool hypo_type_dependencies_walker(Node *node, hypoIndex * entry);
 static bool hypo_can_return(hypoIndex * entry, Oid atttype, int i, char *amname);
 static void hypo_discover_am(char *amname, Oid oid);
 static void hypo_estimate_index_simple(hypoIndex * entry,
@@ -133,6 +135,75 @@ static hypoIndex * hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns,
 static void hypo_set_indexname(hypoIndex * entry, char *indexname);
 
 static void hypopg_internal(FunctionCallInfo fcinfo, hypoVersion api_version);
+
+
+/* Record a type dependency. */
+static void
+hypo_add_type_dependency(hypoIndex * entry, Oid typeid)
+{
+	uint32		hashvalue;
+	ListCell   *lc;
+	PlanInvalItem *item;
+	MemoryContext oldcontext;
+
+	/* As with access methods and operator classes, ignore built-in types. */
+	if (typeid < FirstNormalObjectId)
+		return;
+
+	hashvalue = GetSysCacheHashValue1(TYPEOID, ObjectIdGetDatum(typeid));
+	foreach(lc, entry->invalItems)
+	{
+		item = (PlanInvalItem *) lfirst(lc);
+		if (item->cacheId == TYPEOID && item->hashValue == hashvalue)
+			return;
+	}
+
+	oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+	item = makeNode(PlanInvalItem);
+	item->cacheId = TYPEOID;
+	item->hashValue = hashvalue;
+	entry->invalItems = lappend(entry->invalItems, item);
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Collect type dependencies.
+ *
+ * This function collects both the result types and the internal types used in
+ * expression.
+ */
+static bool
+hypo_type_dependencies_walker(Node *node, hypoIndex * entry)
+{
+	if (node == NULL)
+		return false;
+
+	/* Containers have no result type, but their children still need visiting. */
+	if (!IsA(node, List) && !IsA(node, TargetEntry))
+		hypo_add_type_dependency(entry, exprType(node));
+
+	if (IsA(node, Const))
+	{
+		Const	   *con = (Const *) node;
+
+		/*
+		 * A regtype's value is a dependency too.  Keep the OID
+		 * constants, since coercion to an operator's input type can erase the
+		 * regtype label, just as with regclass relation dependencies.
+		 */
+		if (!con->constisnull &&
+			(con->consttype == REGTYPEOID || con->consttype == OIDOID))
+		{
+			Oid			typeid = DatumGetObjectId(con->constvalue);
+
+			if (typeid >= FirstNormalObjectId &&
+				SearchSysCacheExists1(TYPEOID, ObjectIdGetDatum(typeid)))
+				hypo_add_type_dependency(entry, typeid);
+		}
+	}
+
+	return expression_tree_walker(node, hypo_type_dependencies_walker, entry);
+}
 
 
 /*
@@ -629,6 +700,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 				}
 			}
 
+			hypo_add_type_dependency(entry, atttype);
 			ind_avg_width += hypo_estimate_index_colsize(entry, attn);
 
 			/*
@@ -679,6 +751,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 			entry->opfamily[attn] = get_opclass_family(opclass);
 
 			entry->opcintype[attn] = get_opclass_input_type(opclass);
+			hypo_add_type_dependency(entry, entry->opcintype[attn]);
 
 			/* setup the sort info if am handles it */
 			if (entry->amcanorder)
@@ -801,6 +874,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 						 errmsg("hypopg: expressions are not supported in included columns")));
 			}
 
+			hypo_add_type_dependency(entry, atttype);
 			ind_avg_width += hypo_estimate_index_colsize(entry, attn);
 
 			/* per-column IOS information */
@@ -866,7 +940,7 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 		}
 
 		/*
-		 * Collect dependencies on functions and relations from all index column
+		 * Collect dependencies on functions, relations and types from index column
 		 * expressions and the predicate clause, if any.  This relies on
 		 * upstream extract_query_dependencies, which skips built-in functions
 		 * and uses the unplanned expressions, meaning that constant folding
@@ -896,8 +970,11 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 			oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
 			/* This also retains conservative dependencies on plain OID constants. */
 			entry->relationOids = list_copy(relationOids);
-			entry->invalItems = copyObject(invalItems);
+			entry->invalItems = list_concat(entry->invalItems,
+										   copyObject(invalItems));
 			MemoryContextSwitchTo(oldcontext);
+
+			hypo_type_dependencies_walker((Node *) expressions, entry);
 
 			list_free(relationOids);
 			list_free_deep(invalItems);
@@ -2544,7 +2621,7 @@ HypoCacheRelCallback(Datum arg, Oid relid)
  * hash value, or all hypothetical indexes depending on that cache if
  * hashvalue == 0.
  *
- * For now PROCOID, AMOID and CLAOID are supported.
+ * For now PROCOID, TYPEOID, AMOID and CLAOID are supported.
  */
 void
 HypoCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)
