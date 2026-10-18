@@ -181,6 +181,7 @@ hypo_newIndex(Oid relid, char *accessMethod, int nkeycolumns, int ninccolumns,
 
 	entry->relam = oid;
 	entry->invalidated = false;
+	entry->relationOids = NIL;
 	entry->invalItems = NIL;
 
 #if PG_VERSION_NUM >= 90600
@@ -865,8 +866,8 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 		}
 
 		/*
-		 * Collect dependencies on functions from every index column
-		 * expressions and the predicate clause if any.  This relies on
+		 * Collect dependencies on functions and relations from all index column
+		 * expressions and the predicate clause, if any.  This relies on
 		 * upstream extract_query_dependencies, which skips built-in functions
 		 * and uses the unplanned expressions, meaning that constant folding
 		 * and inlining cannot hide dependencies.
@@ -893,6 +894,8 @@ hypo_index_store_parsetree(IndexStmt *node, const char *queryString)
 
 			/* Save the found dependencies. */
 			oldcontext = MemoryContextSwitchTo(HypoMemoryContext);
+			/* This also retains conservative dependencies on plain OID constants. */
+			entry->relationOids = list_copy(relationOids);
 			entry->invalItems = copyObject(invalItems);
 			MemoryContextSwitchTo(oldcontext);
 
@@ -1061,6 +1064,7 @@ hypo_index_pfree(hypoIndex * entry)
 		list_free_deep(entry->indexprs);
 	if (entry->indpred)
 		pfree(entry->indpred);
+	list_free(entry->relationOids);
 	list_free_deep(entry->invalItems);
 #if PG_VERSION_NUM >= 90500
 	pfree(entry->canreturn);
@@ -2514,7 +2518,7 @@ hypo_discover_am(char *amname, Oid oid)
 }
 
 /*
- * Invalidate all hypothetical indexes if they're on the given relation.
+ * Invalidate hypothetical indexes on or referencing the given relation.
  */
 void
 HypoCacheRelCallback(Datum arg, Oid relid)
@@ -2529,7 +2533,8 @@ HypoCacheRelCallback(Datum arg, Oid relid)
 		 * Note that InvalidOid is passed when the shared-inval-queue
 		 * overflows, in which case we need to invalidate every single entry.
 		 */
-		if (!OidIsValid(relid) || entry->relid == relid)
+		if (!OidIsValid(relid) || entry->relid == relid ||
+			list_member_oid(entry->relationOids, relid))
 			entry->invalidated = true;
 	}
 }
