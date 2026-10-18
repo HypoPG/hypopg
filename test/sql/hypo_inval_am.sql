@@ -47,9 +47,10 @@ BEGIN
             ALTER FUNCTION hypo_inval_am_func(integer) COST 200;
             expected_inval_count := 1;
         ELSE
-            -- Drop the AM along with its extension-owned operator classes.
+            -- Removing the extension also changes operator families and their
+            -- members, which now invalidate every hypothetical index.
             DROP EXTENSION bloom;
-            expected_inval_count := 2;
+            expected_inval_count := 3;
         END IF;
 
         -- We should have the expected number of invalidated indexes
@@ -59,9 +60,9 @@ BEGIN
 
         -- Check the exact hypothetical indexes invalidated
 
-        -- plain_idx doesn't have any dependency here
-        IF (SELECT invalidated FROM hypopg() WHERE indexrelid = plain_idx) THEN
-            RAISE WARNING 'plain_idx should never be invalidated';
+        -- The plain index is affected only by broad invalidation on extension drop.
+        IF (SELECT invalidated FROM hypopg() WHERE indexrelid = plain_idx) <> (action = 'drop') THEN
+            RAISE WARNING 'incorrect plain_idx invalidation: %', action;
         END IF;
 
         -- expr_idx depends on both bloom and the function so in both cases

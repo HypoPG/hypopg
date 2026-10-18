@@ -250,8 +250,9 @@ BEGIN
             ALTER FUNCTION hypo_inval_opclass_func(integer) COST 200;
             expected_invalid := ARRAY[expr_idx];
         ELSE
+            -- Dropping the opclass also removes family members, invalidating all.
             DROP OPERATOR CLASS hypo_inval_opclass1 USING btree;
-            expected_invalid := ARRAY[first_idx, expr_idx];
+            expected_invalid := ARRAY[plain_idx, first_idx, second_idx, expr_idx];
         END IF;
 
         -- Check every index, including the plain_idx using built-in classes.
@@ -521,3 +522,104 @@ BEGIN
     DROP DOMAIN hypo_inval_include_type_renamed;
 END
 $do$;
+
+------------------------------------------------------------------------
+-- Broad invalidation for catalogs without individual dependency tracking.
+------------------------------------------------------------------------
+CREATE TABLE hypo_inval_broad1(a integer);
+CREATE TABLE hypo_inval_broad2(a integer);
+DO $do$
+DECLARE
+    cache_name text;
+    setup_sql text;
+    change_sql text;
+    cleanup_sql text;
+BEGIN
+    -- Prepare each object before creating indexes, then change only the
+    -- catalog under test.  Neither index references any of these objects.
+    FOR cache_name, setup_sql, change_sql, cleanup_sql IN
+        SELECT * FROM (VALUES
+            ('COLLOID',
+             $$CREATE COLLATION hypo_inval_coll FROM pg_catalog."C"$$,
+             $$ALTER COLLATION hypo_inval_coll RENAME TO hypo_inval_coll_renamed$$,
+             $$DROP COLLATION hypo_inval_coll_renamed$$),
+            ('OPEROID',
+             $$CREATE OPERATOR === (LEFTARG = integer, RIGHTARG = integer,
+                                    PROCEDURE = pg_catalog.int4eq)$$,
+             $$DROP OPERATOR === (integer, integer)$$,
+             NULL),
+            ('OPFAMILYOID',
+             $$CREATE OPERATOR FAMILY hypo_inval_family USING btree$$,
+             $$ALTER OPERATOR FAMILY hypo_inval_family USING btree
+                   RENAME TO hypo_inval_family_renamed$$,
+             $$DROP OPERATOR FAMILY hypo_inval_family_renamed USING btree$$),
+            ('AMOPOPID',
+             $$CREATE OPERATOR FAMILY hypo_inval_family USING btree$$,
+             $$ALTER OPERATOR FAMILY hypo_inval_family USING btree
+                   ADD OPERATOR 1 < (integer, integer)$$,
+             $$DROP OPERATOR FAMILY hypo_inval_family USING btree$$),
+            ('AMPROCNUM',
+             $$CREATE OPERATOR FAMILY hypo_inval_family USING btree$$,
+             $$ALTER OPERATOR FAMILY hypo_inval_family USING btree
+                   ADD FUNCTION 1 btint4cmp(integer, integer)$$,
+             $$DROP OPERATOR FAMILY hypo_inval_family USING btree$$),
+            ('TSCONFIGOID',
+             $$CREATE TEXT SEARCH CONFIGURATION hypo_inval_config (COPY = pg_catalog.simple)$$,
+             $$ALTER TEXT SEARCH CONFIGURATION hypo_inval_config RENAME TO hypo_inval_config_renamed$$,
+             $$DROP TEXT SEARCH CONFIGURATION hypo_inval_config_renamed$$),
+            ('TSCONFIGMAP',
+             $$CREATE TEXT SEARCH CONFIGURATION hypo_inval_config (COPY = pg_catalog.simple)$$,
+             $$ALTER TEXT SEARCH CONFIGURATION hypo_inval_config DROP MAPPING FOR asciiword$$,
+             $$DROP TEXT SEARCH CONFIGURATION hypo_inval_config$$),
+            ('TSDICTOID',
+             $$CREATE TEXT SEARCH DICTIONARY hypo_inval_dict (TEMPLATE = pg_catalog.simple)$$,
+             $$ALTER TEXT SEARCH DICTIONARY hypo_inval_dict RENAME TO hypo_inval_dict_renamed$$,
+             $$DROP TEXT SEARCH DICTIONARY hypo_inval_dict_renamed$$),
+            ('TSPARSEROID',
+             $$CREATE TEXT SEARCH PARSER hypo_inval_parser
+                   (START = prsd_start, GETTOKEN = prsd_nexttoken,
+                    END = prsd_end, LEXTYPES = prsd_lextype)$$,
+             $$ALTER TEXT SEARCH PARSER hypo_inval_parser RENAME TO hypo_inval_parser_renamed$$,
+             $$DROP TEXT SEARCH PARSER hypo_inval_parser_renamed$$),
+            ('TSTEMPLATEOID',
+             $$CREATE TEXT SEARCH TEMPLATE hypo_inval_template
+                   (INIT = dsimple_init, LEXIZE = dsimple_lexize)$$,
+             $$ALTER TEXT SEARCH TEMPLATE hypo_inval_template RENAME TO hypo_inval_template_renamed$$,
+             $$DROP TEXT SEARCH TEMPLATE hypo_inval_template_renamed$$)
+        ) AS cases(cache_name, setup_sql, change_sql, cleanup_sql)
+    LOOP
+        PERFORM hypopg_reset();
+        EXECUTE setup_sql;
+        PERFORM hypopg_create_index($$CREATE INDEX ON hypo_inval_broad1 (a)$$);
+        PERFORM hypopg_create_index($$CREATE INDEX ON hypo_inval_broad2 (a)$$);
+
+        -- Type and constraint changes on an unrelated table must remain local.
+        CREATE TABLE hypo_inval_broad_unrelated(a integer CHECK (a > 0));
+        CREATE INDEX ON hypo_inval_broad_unrelated (a);
+        DROP TABLE hypo_inval_broad_unrelated;
+        IF EXISTS (SELECT 1 FROM hypopg() WHERE invalidated) THEN
+            RAISE WARNING 'unrelated table DDL invalidated indexes before %', cache_name;
+        END IF;
+
+        EXECUTE change_sql;
+        IF (SELECT count(*) FROM hypopg()) <> 2 OR
+           EXISTS (SELECT 1 FROM hypopg() WHERE NOT invalidated) THEN
+            RAISE WARNING 'broad invalidation failed for %', cache_name;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM hypopg()
+            WHERE hypopg_get_indexdef(indexrelid) IS DISTINCT FROM '<invalidated>'
+               OR hypopg_relation_size(indexrelid) IS NOT NULL
+        ) THEN
+            RAISE WARNING 'index remains accessible after broad invalidation for %', cache_name;
+        END IF;
+
+        PERFORM hypopg_reset();
+        IF cleanup_sql IS NOT NULL THEN
+            EXECUTE cleanup_sql;
+        END IF;
+    END LOOP;
+END
+$do$;
+DROP TABLE hypo_inval_broad1;
+DROP TABLE hypo_inval_broad2;

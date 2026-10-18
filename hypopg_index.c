@@ -2609,11 +2609,24 @@ HypoCacheRelCallback(Datum arg, Oid relid)
 		/*
 		 * Note that InvalidOid is passed when the shared-inval-queue
 		 * overflows, in which case we need to invalidate every single entry.
+		 *
+		 * This is also used for caches for which we don't track dependencies,
+		 * in which case we have no chocie but to invalidate all entires too.
 		 */
 		if (!OidIsValid(relid) || entry->relid == relid ||
 			list_member_oid(entry->relationOids, relid))
 			entry->invalidated = true;
 	}
+}
+
+/*
+ * Invalidate all hypothetical indexes for catalogs whose dependencies aren't
+ * tracked individually.
+ */
+void
+HypoCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue)
+{
+	HypoCacheRelCallback(arg, InvalidOid);
 }
 
 /*
