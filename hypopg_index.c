@@ -1457,8 +1457,8 @@ hypopg_internal(FunctionCallInfo fcinfo, hypoVersion api_version)
 			values[i++] = Int32GetDatum(entry->ncolumns);
 			values[i++] = BoolGetDatum(entry->unique);
 			values[i++] = PointerGetDatum(buildint2vector(entry->indexkeys, entry->ncolumns));
-			values[i++] = PointerGetDatum(buildoidvector(entry->indexcollations, entry->ncolumns));
-			values[i++] = PointerGetDatum(buildoidvector(entry->opclass, entry->ncolumns));
+			values[i++] = PointerGetDatum(buildoidvector(entry->indexcollations, entry->nkeycolumns));
+			values[i++] = PointerGetDatum(buildoidvector(entry->opclass, entry->nkeycolumns));
 			nulls[i++] = true;		/* no indoption for now, TODO */
 
 			/* get each of indexprs, if any */

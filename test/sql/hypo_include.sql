@@ -29,3 +29,10 @@ WHERE e ~ 'Index Only Scan.*<\d+>btree_hypo.*';
 
 -- Deparse the index DDL
 SELECT hypopg_get_indexdef(indexrelid) FROM hypopg();
+
+-- Check that indkey covers all attributes, while indcollations and indclass
+-- only cover key columns
+SELECT array_length(indkey, 1) = innatts
+       AND array_length(indcollation, 1) = 1
+       AND array_length(indclass, 1) = 1 AS key_vectors_match
+FROM hypopg();
