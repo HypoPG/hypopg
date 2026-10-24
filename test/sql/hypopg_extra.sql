@@ -25,3 +25,16 @@ SELECT COUNT(*) FROM do_explain($$
     JOIN generate_series(1, 10) f(g) ON h.id = f.g
 $$) e
 WHERE e ~ 'Index.*<\d+>btree_hypo';
+
+-- check that an error doesn't leak the "is_explain" state
+SET enable_seqscan = off;
+DO $$
+BEGIN
+    EXECUTE 'EXPLAIN SELECT 1 / 0';
+EXCEPTION WHEN division_by_zero THEN
+    NULL;
+END
+$$;
+SELECT COUNT(*) = 1 AS ordinary_query_ok FROM hypo WHERE id = 1;
+RESET enable_seqscan;
+SELECT hypopg_reset();

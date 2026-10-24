@@ -340,6 +340,8 @@ hypo_utility_hook(
 #endif
 				  )
 {
+	bool		save_isExplain = isExplain;
+
 	isExplain = hypo_is_simple_explain(
 #if PG_VERSION_NUM >= 100000
 									   (Node *) pstmt
@@ -348,6 +350,8 @@ hypo_utility_hook(
 #endif
 									   );
 
+	PG_TRY();
+	{
 	if (prev_utility_hook)
 		prev_utility_hook(
 #if PG_VERSION_NUM >= 100000
@@ -405,6 +409,14 @@ hypo_utility_hook(
 #endif
 						  );
 
+	}
+	PG_CATCH();
+	{
+		isExplain = save_isExplain;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+	isExplain = save_isExplain;
 }
 
 static bool
