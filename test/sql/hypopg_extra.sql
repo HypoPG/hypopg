@@ -3,6 +3,43 @@
 -- Remove all the hypothetical indexes if any
 SELECT hypopg_reset();
 
+-- Check that custom objects cannot override hypopg internal hypothetical oid
+-- threshold retrieval.  This is done during the first hypothetical index
+-- creation in a backend so it needs to be first
+CREATE FUNCTION public.max_state(oid, oid) RETURNS oid AS
+$$
+BEGIN
+    RAISE EXCEPTION 'custom aggregate used';
+END;
+$$
+LANGUAGE plpgsql STABLE;
+CREATE AGGREGATE public.max(oid) (
+    SFUNC = public.max_state,
+    STYPE = oid,
+    INITCOND = '0'
+);
+
+CREATE FUNCTION public.lt(oid, oid) RETURNS bool AS
+$$
+BEGIN
+    RAISE EXCEPTION 'custom operator used';
+END;
+$$
+LANGUAGE plpgsql
+SET search_path TO pg_catalog, pg_temp;
+CREATE OPERATOR public.< (
+    PROCEDURE = public.lt,
+    LEFTARG = oid,
+    RIGHTARG = oid
+);
+
+SET search_path = public, pg_catalog;
+SELECT count(*)
+FROM public.hypopg_create_index('CREATE INDEX ON public.hypo (id)');
+
+RESET search_path;
+SELECT hypopg_reset();
+
 -------------------
 -- JOIN with an SRF
 -------------------
