@@ -1,6 +1,30 @@
 Changelog
 =========
 
+2026-10-25 version 1.4.4:
+-------------------------
+
+  **Bug fixes**:
+
+  - Fix hypothetical index name for Oid >= 2^31 (Devrim Gündüz)
+  - Fix memory leak of WITH clause options (Devrim Gündüz)
+  - Check maximum number of columns with included columns too (Devrim Gündüz,
+    Julien Rouhaud)
+  - Invalidate hypothetical indexes when receiving an invalidation message for
+    on the dependent object when possible (relations, functions, access
+    methods, operator classes, types), or just any invalidation message for all
+    other object type (Julien Rouhaud, per initial from Devrim Gündüz)
+  - Fix indcollation and indclass columns in hypopg() (Matt Blewitt)
+  - Prevent failed EXPLAIN from affecting later queries (Matt Blewitt, Julien
+    Rouhaud)
+  - Protect hypothetocal Oid range query against user objects (Julien Rouhaud,
+    per report from Matt Blewitt)
+
+  **Miscellaneous**:
+
+  - Additional pg 19 compatibility fixes (Julien Rouhaud, with one problem
+    reported by Nacho Alonso Portillo)
+
 2026-06-20 version 1.4.3:
 -------------------------
 
