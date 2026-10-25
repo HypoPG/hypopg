@@ -20,3 +20,6 @@ People who contributed to hypopg:
   * Xiaozhe Yao
   * Krzysztof Szularz
   * NutVII
+  * Devrim Gündüz
+  * Matt Blewitt
+  * rohit singh
