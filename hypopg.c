@@ -518,9 +518,16 @@ hypo_get_min_fake_oid(void)
 		/* internal error */
 		elog(ERROR, "SPI connect failure - returned %d", ret);
 
-	ret = SPI_execute("SELECT max(oid)"
+	/*
+	 * Get the maximum Oid below FirstNormalObjectId found in the catalog.
+	 *
+	 * This is executed in the user session so we have to make sure that
+	 * everything in the query is fully qualified otherwise it could run user
+	 * code.
+	 */
+	ret = SPI_execute("SELECT pg_catalog.max(oid)"
 			" FROM pg_catalog.pg_class"
-			" WHERE oid < " CppAsString2(FirstNormalObjectId),
+			" WHERE oid OPERATOR(pg_catalog.<) " CppAsString2(FirstNormalObjectId),
 			true, 1);
 	nb = SPI_processed;
 
