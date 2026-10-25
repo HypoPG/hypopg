@@ -130,5 +130,5 @@ You can now compile and install HypoPG.  Simply run:
 
     make install
 
-If no errors occured, HypoPG is now available!  If you need help on how to use
+If no errors occurred, HypoPG is now available!  If you need help on how to use
 it, please refer to the :ref:`usage` section.
