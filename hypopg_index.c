@@ -62,6 +62,7 @@
 #if PG_VERSION_NUM >= 120000
 #include "port/pg_bitutils.h"
 #endif
+#include "rewrite/rewriteManip.h"
 #include "storage/bufmgr.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -1291,9 +1292,19 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 	index->amcanparallel = entry->amcanparallel;
 #endif
 
-	/* these has already been handled in hypo_index_store_parsetree() if any */
-	index->indexprs = list_copy(entry->indexprs);
-	index->indpred = list_copy(entry->indpred);
+	/*
+	 * Deep-copy expressions/predicate (list_copy is shallow).  They are stored
+	 * with varno = 1; rewrite to the parent relation's current varno, same as
+	 * plancat.c's get_relation_info().  Must copy before ChangeVarNodes so we
+	 * do not mutate the shared hypoIndex trees.
+	 */
+	index->indexprs = copyObject(entry->indexprs);
+	index->indpred = copyObject(entry->indpred);
+	if (index->indexprs && rel->relid != 1)
+		ChangeVarNodes((Node *) index->indexprs, 1, rel->relid, 0);
+	if (index->indpred && rel->relid != 1)
+		ChangeVarNodes((Node *) index->indpred, 1, rel->relid, 0);
+
 	index->predOK = false;		/* will be set later in indxpath.c */
 
 	/*
@@ -2112,6 +2123,7 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 		Query	   *parse;
 		List	   *rtable = NIL;
 		RangeTblEntry *rte;
+		RelOptInfo *samerel;
 
 		/* create a fake minimal PlannerInfo */
 		root = makeNode(PlannerInfo);
@@ -2122,7 +2134,8 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 
 		/* only 1 table: the one related to this hypothetical index */
 		rte = makeNode(RangeTblEntry);
-		rte->relkind = RTE_RELATION;
+		rte->rtekind = RTE_RELATION;
+		rte->relkind = get_rel_relkind(entry->relid);
 		rte->relid = entry->relid;
 		rte->inh = false;		/* don't include inherited children */
 		rtable = lappend(rtable, rte);
@@ -2136,8 +2149,19 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 		 * will also set up simple_rte_arrays with the previous rte.
 		 */
 		setup_simple_rel_arrays(root);
-		/* also add our table info */
-		root->simple_rel_array[1] = rel;
+
+		/*
+		 * Predicates are stored with varno = 1 and the fake range table has a
+		 * single entry, so selectivity estimation must see a RelOptInfo whose
+		 * relid matches that slot.  The caller's RelOptInfo keeps the real
+		 * query relid (which can be > 1 behind a view, join or subquery);
+		 * using it here would make get_actual_variable_range() index
+		 * simple_rte_array out of bounds and crash.
+		 */
+		samerel = makeNode(RelOptInfo);
+		memcpy(samerel, rel, sizeof(RelOptInfo));
+		samerel->relid = 1;
+		root->simple_rel_array[1] = samerel;
 
 		/*
 		 * per comment on clause_selectivity(), JOIN_INNER must be passed if

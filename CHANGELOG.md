@@ -1,6 +1,16 @@
 Changelog
 =========
 
+Unreleased:
+-----------
+
+  **Bug fixes**:
+
+  - Fix segfault when estimating a partial hypothetical index on a table that
+    is not the first range-table entry (e.g. behind a view or join), and rewrite
+    index expressions/predicates with ChangeVarNodes so they can match such
+    queries (David de Leon)
+
 2026-10-25 version 1.4.4:
 -------------------------
 
