@@ -75,3 +75,36 @@ $$;
 SELECT COUNT(*) = 1 AS ordinary_query_ok FROM hypo WHERE id = 1;
 RESET enable_seqscan;
 SELECT hypopg_reset();
+
+-----------------------------------------------
+-- Partial hypothetical index through a view
+-- (previously segfaulted during size estimation)
+-----------------------------------------------
+
+-- Real index required to reach get_actual_variable_range during estimation
+CREATE INDEX hypo_extra_id_idx ON hypo (id);
+
+CREATE VIEW hypo_extra_v AS
+  SELECT id, val FROM hypo WHERE id > 0;
+
+SELECT COUNT(*) AS nb
+FROM hypopg_create_index('CREATE INDEX ON hypo (id) WHERE id > 0');
+
+-- Must not crash; should use the partial hypothetical index
+SELECT COUNT(*) FROM do_explain($$
+    SELECT * FROM hypo_extra_v WHERE id = 1
+$$) e
+WHERE e ~ 'Index.*<\d+>btree_hypo';
+
+-- Same via a join (table is not RTE #1)
+SELECT COUNT(*) FROM do_explain($$
+    SELECT *
+    FROM generate_series(1, 10) f(g)
+    JOIN hypo h ON h.id = f.g
+    WHERE h.id > 0
+$$) e
+WHERE e ~ 'Index.*<\d+>btree_hypo';
+
+DROP VIEW hypo_extra_v;
+DROP INDEX hypo_extra_id_idx;
+SELECT hypopg_reset();
