@@ -122,7 +122,8 @@ static bool hypo_can_return(hypoIndex * entry, Oid atttype, int i, char *amname)
 static void hypo_discover_am(char *amname, Oid oid);
 static void hypo_estimate_index_simple(hypoIndex * entry,
 									   BlockNumber *pages, double *tuples);
-static void hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel);
+static void hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel,
+								Relation reln);
 static int	hypo_estimate_index_colsize(hypoIndex * entry, int col);
 static void hypo_index_pfree(hypoIndex * entry);
 static bool hypo_index_remove(Oid indexid);
@@ -1306,7 +1307,7 @@ hypo_injectHypotheticalIndex(PlannerInfo *root,
 	 * estimate most of the hypothyetical index stuff, more exactly: tuples,
 	 * pages and tree_height (9.3+)
 	 */
-	hypo_estimate_index(entry, rel);
+	hypo_estimate_index(entry, rel, relation);
 
 	index->pages = entry->pages;
 	index->tuples = entry->tuples;
@@ -2064,7 +2065,7 @@ hypo_estimate_index_simple(hypoIndex * entry, BlockNumber *pages, double *tuples
 	/* Close the relation and release the lock now */
 	table_close(relation, AccessShareLock);
 
-	hypo_estimate_index(entry, rel);
+	hypo_estimate_index(entry, rel, relation);
 	*pages = entry->pages;
 	*tuples = entry->tuples;
 }
@@ -2075,7 +2076,7 @@ hypo_estimate_index_simple(hypoIndex * entry, BlockNumber *pages, double *tuples
  * RelOptInfo
  */
 static void
-hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
+hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel, Relation reln)
 {
 	int			i,
 				ind_avg_width = 0;
@@ -2122,7 +2123,8 @@ hypo_estimate_index(hypoIndex * entry, RelOptInfo *rel)
 
 		/* only 1 table: the one related to this hypothetical index */
 		rte = makeNode(RangeTblEntry);
-		rte->relkind = RTE_RELATION;
+		rte->rtekind = RTE_RELATION;
+		rte->relkind = reln->rd_rel->relkind;
 		rte->relid = entry->relid;
 		rte->inh = false;		/* don't include inherited children */
 		rtable = lappend(rtable, rte);
