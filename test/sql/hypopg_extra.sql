@@ -75,3 +75,36 @@ $$;
 SELECT COUNT(*) = 1 AS ordinary_query_ok FROM hypo WHERE id = 1;
 RESET enable_seqscan;
 SELECT hypopg_reset();
+
+------------------------------------------------------------
+-- Table with hypothetical partial indexes in various places
+------------------------------------------------------------
+
+-- an extra index is necessary to force get_actual_variable_range() being run
+CREATE INDEX real_idx ON hypo (id);
+
+SELECT count(*)
+FROM public.hypopg_create_index('CREATE INDEX ON public.hypo (id) WHERE id > 0');
+
+SELECT COUNT(*) FROM do_explain($$
+    SELECT *
+    FROM generate_series(1, 10) f(g)
+    JOIN hypo h ON h.id = f.g
+    WHERE id > 0
+$$) e
+WHERE e ~ 'Index.*<\d+>btree_hypo';
+
+CREATE VIEW v_hypo AS
+SELECT *
+FROM hypo
+WHERE id = 1;
+
+SELECT COUNT(*) FROM do_explain($$
+    SELECT *
+    FROM v_hypo
+    WHERE id = 1
+$$) e
+WHERE e ~ 'Index.*<\d+>btree_hypo';
+
+DROP INDEX real_idx;
+DROP VIEW v_hypo;
