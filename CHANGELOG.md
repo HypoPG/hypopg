@@ -1,6 +1,15 @@
 Changelog
 =========
 
+2026-11-01 version 1.4.5:
+-------------------------
+
+  **Bug fixes**:
+
+  - Fix long standing thinko in hypo_estimate_index (Julien Rouhaud)
+  - Fix relid handling in hypothetical indexes, that could lead to a crash
+    (Julien Rouhaud)
+
 2026-10-25 version 1.4.4:
 -------------------------
 
