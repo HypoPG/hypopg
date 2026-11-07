@@ -2075,10 +2075,11 @@ hypo_estimate_index_simple(hypoIndex * entry, BlockNumber *pages, double *tuples
 	estimate_rel_size(relation, rel->attr_widths - rel->min_attr,
 					  &rel->pages, &rel->tuples, &rel->allvisfrac);
 
+	hypo_estimate_index(entry, rel, relation);
+
 	/* Close the relation and release the lock now */
 	table_close(relation, AccessShareLock);
 
-	hypo_estimate_index(entry, rel, relation);
 	*pages = entry->pages;
 	*tuples = entry->tuples;
 }
