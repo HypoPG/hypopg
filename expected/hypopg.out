@@ -191,3 +191,28 @@ WHERE e ~ 'Index.*<\d+>btree_hypo.*';
      1
 (1 row)
 
+SELECT count(*) FROM hypopg_list_indexes;
+ count 
+-------
+     3
+(1 row)
+
+-- We shouldn't remove anything if the DISCARD command failed
+BEGIN;
+DISCARD ALL;
+ERROR:  DISCARD ALL cannot run inside a transaction block
+ROLLBACK;
+SELECT count(*) FROM hypopg_list_indexes;
+ count 
+-------
+     3
+(1 row)
+
+-- DISCARD ALL should remove all hypothetical indexes
+DISCARD ALL;
+SELECT count(*) FROM hypopg_list_indexes;
+ count 
+-------
+     0
+(1 row)
+

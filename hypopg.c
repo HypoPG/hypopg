@@ -341,14 +341,17 @@ hypo_utility_hook(
 				  )
 {
 	bool		save_isExplain = isExplain;
+	Node	   *ustmt;
 
-	isExplain = hypo_is_simple_explain(
 #if PG_VERSION_NUM >= 100000
-									   (Node *) pstmt
+	Node	   *parsetree = (Node *) pstmt;
+
+	ustmt = ((PlannedStmt *) parsetree)->utilityStmt;
 #else
-									   parsetree
+	ustmt = parsetree;
 #endif
-									   );
+
+	isExplain = hypo_is_simple_explain(ustmt);
 
 	PG_TRY();
 	{
@@ -417,6 +420,22 @@ hypo_utility_hook(
 	}
 	PG_END_TRY();
 	isExplain = save_isExplain;
+
+	/*
+	 * If the utility statement is a DISCARD ALL command, also remove all
+	 * existing hypothetical indexes.
+	 *
+	 * Note that this needs to happen after utility statement execution, as it
+	 * takes care of checking the needed heuristic (like not being able to run
+	 * in a transaction)
+	 */
+	if (IsA(ustmt, DiscardStmt))
+	{
+		DiscardStmt *discard = (DiscardStmt *) ustmt;
+
+		if (discard->target == DISCARD_ALL)
+			hypo_index_reset();
+	}
 }
 
 static bool
@@ -455,24 +474,18 @@ hypo_index_match_table(hypoIndex *entry, Oid relid)
  * i.e. an EXPLAIN, no ANALYZE
  */
 static bool
-hypo_is_simple_explain(Node *parsetree)
+hypo_is_simple_explain(Node *ustmt)
 {
-	if (parsetree == NULL)
+	if (ustmt == NULL)
 		return false;
 
-#if PG_VERSION_NUM >= 100000
-	parsetree = ((PlannedStmt *) parsetree)->utilityStmt;
-	if (parsetree == NULL)
-		return false;
-#endif
-
-	switch (nodeTag(parsetree))
+	switch (nodeTag(ustmt))
 	{
 		case T_ExplainStmt:
 			{
 				ListCell   *lc;
 
-				foreach(lc, ((ExplainStmt *) parsetree)->options)
+				foreach(lc, ((ExplainStmt *) ustmt)->options)
 				{
 					DefElem    *opt = (DefElem *) lfirst(lc);
 

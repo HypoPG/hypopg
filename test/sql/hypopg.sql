@@ -118,3 +118,13 @@ FROM public.hypopg_create_index('CREATE INDEX ON hypo(id);');
 -- Should use hypothetical index
 SELECT COUNT(*) FROM do_explain('SELECT * FROM hypo WHERE id = 1') e
 WHERE e ~ 'Index.*<\d+>btree_hypo.*';
+
+SELECT count(*) FROM hypopg_list_indexes;
+-- We shouldn't remove anything if the DISCARD command failed
+BEGIN;
+DISCARD ALL;
+ROLLBACK;
+SELECT count(*) FROM hypopg_list_indexes;
+-- DISCARD ALL should remove all hypothetical indexes
+DISCARD ALL;
+SELECT count(*) FROM hypopg_list_indexes;

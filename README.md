@@ -103,11 +103,12 @@ Of course, only `EXPLAIN` without `ANALYZE` will use hypothetical indexes:
 
 To remove your backend's hypothetical indexes, you can use the function
 `hypopg_drop_index(indexrelid)` with the OID that the `hypopg_list_indexes`
-view returns and call `hypopg_reset()` to remove all at once, or just close
-your current connection.
+view returns.  You can also call `hypopg_reset()` to remove all existing
+hypothetical indexes at once, or just close your current connection.  Note that
+`DISCARD ALL` will also remove all hypothetical indexes.
 
-Continuing with the above case, you can `hide existing indexes`,
-but should be use `hypopg_reset()` to clear the previous effects of other indexes at first.
+Continuing with the above case, you can `hide existing indexes`, but we need to
+use `hypopg_reset()` to clear the previous effects of other indexes at first.
 
 Create two real indexes and run `EXPLAIN`:
 
