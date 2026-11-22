@@ -154,7 +154,7 @@ We can run the EXPLAIN again to see if PostgreSQL would use this index:
   (2 rows)
 
 Yes, PostgreSQL would use such an index.  Just to be sure, let's check that the
-hypothetical index won't be used to acually run the query:
+hypothetical index won't be used to actually run the query:
 
 .. code-block:: psql
 
